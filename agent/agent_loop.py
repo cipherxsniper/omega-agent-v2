@@ -1,19 +1,19 @@
 """
 agent_loop.py — real agentic tool-use loop.
 
-The model gets real tools (read_file, write_file, run_bash, compile_code) via
-Groq function-calling. Each step: model responds with either a tool call or a
-final answer. Tool calls are executed for real via ActionEngine's honest
-dispatch handlers, results are fed back to the model, and the loop repeats
-until the model stops calling tools or max_steps is hit.
+The model gets real tools via Groq function-calling, including the ability
+to propose brand-new tools for itself (test-gated, via self_extend.py).
+Every tool call is executed for real via ActionEngine's honest dispatch
+handlers, results are fed back to the model, and the loop repeats until
+the model stops calling tools or max_steps is hit.
 
 Every real tool result is signed via proofchain if a signed_log path is given.
-No fake success anywhere in this file — a tool either genuinely ran or the
-loop reports the real error back to the model.
+Session state persists across separate invocations via --resume.
 """
 import os
 import sys
 import json
+import time
 import asyncio
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,7 +21,8 @@ sys.path.append(os.path.expanduser('~/.omega/lib'))
 
 from api.groq_client import chat_completion
 from agent.core.action_engine import Action, ActionNode, ActionExecutor, ActionValidator, SideEffectAnalyzer
-from omega_proof import sign_event
+from agent.self_extend import propose_tool
+from lib.omega_proof import sign_event
 
 TOOLS = [
     {
@@ -54,6 +55,30 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": "Replace an exact unique text match in a file with new text (like find-and-replace).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_str": {"type": "string", "description": "Exact text to find, must be unique in file"},
+                    "new_str": {"type": "string", "description": "Text to replace it with"},
+                },
+                "required": ["path", "old_str", "new_str"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "List files and directories at the given path.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_bash",
             "description": "Run a shell command and return its stdout/stderr/exit code.",
             "parameters": {
@@ -72,30 +97,6 @@ TOOLS = [
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_dir",
-            "description": "List files and directories at the given path.",
-            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": "Replace an exact unique text match in a file with new text (like find-and-replace).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "old_str": {"type": "string", "description": "Exact text to find, must be unique in file"},
-                    "new_str": {"type": "string", "description": "Text to replace it with"},
-                },
-                "required": ["path", "old_str", "new_str"],
             },
         },
     },
@@ -127,6 +128,124 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": "Search for a text/regex pattern across .py/.js/.jsx files under a directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob_find",
+            "description": "Find files matching a glob pattern recursively under a directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_todos",
+            "description": "Save/update your task checklist for a multi-step job.",
+            "parameters": {
+                "type": "object",
+                "properties": {"todos": {"type": "array", "items": {"type": "string"}}},
+                "required": ["todos"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_todos",
+            "description": "Read your current task checklist.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch the content of a URL.",
+            "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": "Run pytest against a file or directory and report real pass/fail results.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": "Show recent commit history.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "count": {"type": "integer"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "word_count",
+            "description": "Count words in a file.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "description": "Search your own cryptographically verified history (past agent decisions, tool executions, and self-extension attempts) for a keyword. Use this to check what you've already done or learned before, instead of assuming.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_new_tool",
+            "description": (
+                "Propose a brand-new tool for yourself when none of your existing tools can "
+                "accomplish something you need. You must provide: the handler code (a Python "
+                "'elif name == \"toolname\": ...' block matching the existing dispatch pattern, "
+                "returning (bool success, dict output)), and a pytest test proving it works. "
+                "Your proposal is only merged into your real capabilities if it compiles, your "
+                "own test passes, AND the full existing regression suite still passes afterward. "
+                "If any check fails, the attempt is rejected and logged, and you keep your "
+                "current tools unchanged."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "handler_name": {"type": "string"},
+                    "handler_code": {"type": "string"},
+                    "test_code": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["handler_name", "handler_code", "test_code"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = (
@@ -146,6 +265,17 @@ async def _execute_tool_call(executor, tool_call):
     except json.JSONDecodeError as e:
         return {"error": f"Model sent malformed tool arguments: {e}"}
 
+    if name == "propose_new_tool":
+        # Not a normal dispatch action — runs the full test-gated self-extension
+        # pipeline instead, synchronously (it's already fast: compile + pytest).
+        result = propose_tool(
+            handler_name=args.get("handler_name", "unnamed_tool"),
+            handler_code=args.get("handler_code", ""),
+            test_code=args.get("test_code", ""),
+            description=args.get("description", ""),
+        )
+        return result
+
     action = Action(name=name, target=args.get("path"))
     node = ActionNode(action=action, parameters=args)
     result = await executor._execute_with_retry(node, {})
@@ -157,7 +287,22 @@ async def _execute_tool_call(executor, tool_call):
     }
 
 
-def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None):
+SESSION_PATH = os.path.expanduser("~/.omega/logs/agent_session.json")
+
+
+def load_session():
+    if os.path.exists(SESSION_PATH):
+        with open(SESSION_PATH) as f:
+            return json.load(f)
+    return None
+
+
+def save_session(messages):
+    with open(SESSION_PATH, "w") as f:
+        json.dump({"messages": messages, "saved_at": time.time()}, f, indent=2, default=str)
+
+
+def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False):
     """
     Runs the real tool-use loop synchronously (wraps async internals).
     Returns the full transcript: list of {step, role, content/tool_calls/tool_result}.
@@ -170,20 +315,30 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
     if cwd_hint:
         system += f" The current working directory is {cwd_hint}."
 
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": task_description},
-    ]
+    prior = load_session() if resume else None
+    if prior and prior.get("messages"):
+        messages = prior["messages"]
+        messages.append({"role": "user", "content": task_description})
+    else:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": task_description},
+        ]
 
     transcript = []
     loop = asyncio.new_event_loop()
 
     try:
         for step in range(max_steps):
+            MAX_RECENT_MESSAGES = 6
+            trimmed = messages[:2] + messages[2:][-MAX_RECENT_MESSAGES:]
+            effort = "default"
+
             message = chat_completion(
-                messages,
+                trimmed,
                 tools=TOOLS,
-                reasoning_effort="default",
+                reasoning_effort=effort,
+                max_tokens=1024,
                 return_message=True,
             )
 
@@ -215,21 +370,26 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": json.dumps(result),
+                    "content": json.dumps(result, default=str),
                 })
         else:
             transcript.append({"step": max_steps, "role": "system", "content": f"Stopped: hit max_steps ({max_steps}) without model finishing."})
 
     finally:
         loop.close()
+        save_session(messages)
 
     return transcript
 
 
 if __name__ == "__main__":
     import sys as _sys
-    task = " ".join(_sys.argv[1:]) or "List the files in the current directory using run_bash, then summarize what you see."
+    args = _sys.argv[1:]
+    resume = "--resume" in args
+    if resume:
+        args.remove("--resume")
+    task = " ".join(args) or "List the files in the current directory using run_bash, then summarize what you see."
     log_path = os.path.expanduser("~/.omega/logs/agent_loop_signed.log")
-    result = run_agent_task(task, signed_log=log_path)
+    result = run_agent_task(task, signed_log=log_path, resume=resume)
     for entry in result:
         print(json.dumps(entry, indent=2, default=str))

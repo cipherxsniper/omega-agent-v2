@@ -6,3 +6,8 @@ asyncpg==0.29.0
 pydantic==2.6.4
 numpy==1.26.4
 gunicorn
+flask
+flask-cors
+requests
+python-dotenv
+cryptography

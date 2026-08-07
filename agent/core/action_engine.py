@@ -1,8 +1,12 @@
 import asyncio
+import json
 import logging
 import time
 import py_compile
 import os
+import sys
+sys.path.append(os.path.expanduser('~/.omega/lib'))
+from lib.omega_proof import sign_event
 from typing import Dict, Any, List, Optional, Set
 from dataclasses import dataclass, field
 
@@ -145,10 +149,11 @@ class ActionExecutor:
     """
     Handles robust execution of selected actions with built-in retries, rollbacks, and log tracing.
     """
-    def __init__(self, validator: ActionValidator, analyzer: SideEffectAnalyzer):
+    def __init__(self, validator: ActionValidator, analyzer: SideEffectAnalyzer, signed_log: str = None):
         self.validator = validator
         self.analyzer = analyzer
         self.audit_log: List[ExecutionResult] = []
+        self.signed_log = signed_log or os.path.expanduser('~/.omega/logs/action_engine_signed.log')
 
     async def execute_plan(self, plan: List[ActionNode], current_state: Dict[str, Any]) -> List[ExecutionResult]:
         execution_trace = []
@@ -312,6 +317,159 @@ class ActionExecutor:
             except Exception as e:
                 return False, {"error": str(e)}
 
+        elif name == "grep_search":
+            pattern = node.parameters.get("pattern")
+            search_path = target or "."
+            if not pattern:
+                return False, {"error": "grep_search requires 'pattern'"}
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.jsx",
+                     "-e", pattern, search_path],
+                    capture_output=True, text=True, timeout=20
+                )
+                matches = proc.stdout.strip().split("\n") if proc.stdout.strip() else []
+                return True, {"status_code": "OK", "pattern": pattern, "match_count": len(matches),
+                               "matches": matches[:50]}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "glob_find":
+            pattern = node.parameters.get("pattern")
+            if not pattern:
+                return False, {"error": "glob_find requires 'pattern'"}
+            try:
+                import glob as globmod
+                search_root = target or "."
+                full_pattern = os.path.join(search_root, "**", pattern)
+                matches = globmod.glob(full_pattern, recursive=True)
+                matches = [m for m in matches if "node_modules" not in m and "__pycache__" not in m]
+                return True, {"status_code": "OK", "pattern": pattern, "match_count": len(matches),
+                               "matches": matches[:100]}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "write_todos":
+            todos = node.parameters.get("todos")
+            if todos is None:
+                return False, {"error": "write_todos requires 'todos' (list of task strings/objects)"}
+            todo_path = os.path.expanduser("~/.omega/logs/agent_todos.json")
+            try:
+                import json as jsonmod
+                with open(todo_path, "w") as f:
+                    jsonmod.dump({"todos": todos, "updated_at": time.time()}, f, indent=2)
+                return True, {"status_code": "OK", "todo_count": len(todos)}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "read_todos":
+            todo_path = os.path.expanduser("~/.omega/logs/agent_todos.json")
+            if not os.path.exists(todo_path):
+                return True, {"status_code": "OK", "todos": [], "note": "no todo list exists yet"}
+            try:
+                import json as jsonmod
+                with open(todo_path) as f:
+                    data = jsonmod.load(f)
+                return True, {"status_code": "OK", "todos": data.get("todos", [])}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "web_fetch":
+            url = node.parameters.get("url")
+            if not url:
+                return False, {"error": "web_fetch requires 'url'"}
+            try:
+                import urllib.request
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = resp.read(50000).decode("utf-8", errors="replace")
+                return True, {"status_code": resp.status, "url": url, "content": body[:5000],
+                               "truncated": len(body) >= 5000}
+            except Exception as e:
+                return False, {"error": f"Fetch failed: {e}"}
+
+        elif name == "run_tests":
+            test_path = target or "."
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    ["python3", "-m", "pytest", test_path, "-v", "--tb=short"],
+                    capture_output=True, text=True, timeout=60
+                )
+                return proc.returncode == 0, {
+                    "status_code": proc.returncode,
+                    "stdout": proc.stdout[-4000:],
+                    "stderr": proc.stderr[-2000:],
+                    "passed": proc.returncode == 0,
+                }
+            except FileNotFoundError:
+                return False, {"error": "pytest not installed (pip install pytest)"}
+            except subprocess.TimeoutExpired:
+                return False, {"error": "Tests timed out after 60s"}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "git_log":
+            n = node.parameters.get("count", 10)
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    ["git", "log", f"-{n}", "--oneline"],
+                    cwd=target or ".", capture_output=True, text=True, timeout=15
+                )
+                commits = proc.stdout.strip().split("\n") if proc.stdout.strip() else []
+                return proc.returncode == 0, {"status_code": proc.returncode, "commits": commits}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "word_count":
+            if not target:
+                return False, {"error": "word_count requires a target file path"}
+            if not os.path.exists(target):
+                return False, {"error": f"File not found: {target}"}
+            with open(target) as f:
+                text = f.read()
+            return True, {"status_code": "OK", "words": len(text.split())}
+
+        elif name == "line_count":
+            if not target:
+                return False, {"error": "line_count requires a target file path"}
+            if not os.path.exists(target):
+                return False, {"error": f"File not found: {target}"}
+            with open(target) as f:
+                lines = f.readlines()
+            return True, {"status_code": "OK", "lines": len(lines)}
+
+        elif name == "memory_search":
+            query = node.parameters.get("query")
+            if not query:
+                return False, {"error": "memory_search requires 'query'"}
+            log_dir = os.path.expanduser("~/.omega/logs")
+            log_files = ["agent_loop_signed.log", "action_engine_signed.log", "self_extend_signed.log"]
+            matches = []
+            for fname in log_files:
+                fpath = os.path.join(log_dir, fname)
+                if not os.path.exists(fpath):
+                    continue
+                with open(fpath) as f:
+                    for line in f:
+                        if query.lower() in line.lower():
+                            try:
+                                entry = json.loads(line)
+                                matches.append({
+                                    "source_log": fname,
+                                    "type": entry.get("type"),
+                                    "signed_at": entry.get("signed_at"),
+                                    "data": entry.get("data"),
+                                    "entry_hash": entry.get("entry_hash"),
+                                })
+                            except json.JSONDecodeError:
+                                continue
+            matches.sort(key=lambda m: m.get("signed_at", ""), reverse=True)
+            return True, {"status_code": "OK", "query": query, "match_count": len(matches),
+                           "matches": matches[:15]}
+
         elif name == "deploy_canary":
             # Honestly not implemented yet — no real deploy mechanism exists.
             # Reporting success here would be exactly the kind of fake
@@ -338,12 +496,22 @@ class ActionExecutor:
                 success, output = await self._dispatch_action(node)
                 
                 duration = time.time() - start_time
-                return ExecutionResult(
+                result = ExecutionResult(
                     action_name=node.action.name,
                     success=success,
                     output=output,
                     execution_time=duration
                 )
+                try:
+                    sign_event(self.signed_log, event_type="action_execution", data={
+                        "action": node.action.name,
+                        "target": node.action.target,
+                        "success": success,
+                        "output": output,
+                    })
+                except Exception as sign_err:
+                    logger.warning(f"Failed to sign action result (continuing anyway): {sign_err}")
+                return result
             except Exception as e:
                 logger.warning(f"Attempt {attempt} failed: {e}")
                 if attempt >= max_retries:
