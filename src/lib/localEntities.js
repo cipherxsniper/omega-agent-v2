@@ -74,7 +74,6 @@ const makeEntity = (name) => ({
     return { success: true };
   },
   subscribe: (callback) => {
-    // no realtime backend in local mode; no-op unsubscribe
     return () => {};
   },
 });
@@ -83,70 +82,36 @@ export const entities = new Proxy({}, {
   get: (_target, name) => makeEntity(name),
 });
 
+// --- Real backend call, replacing the old direct-from-browser Groq call ---
+// No API key here — the key lives only on the server now (chat_server.py).
+const AGENT_BACKEND_URL = import.meta.env.VITE_AGENT_BACKEND_URL || "http://localhost:8420";
+
+const callAgentBackend = async ({ prompt }) => {
+  try {
+    const res = await fetch(`${AGENT_BACKEND_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: prompt }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return { data: { error: `Agent backend error: ${err}` } };
+    }
+
+    const json = await res.json();
+    return { data: { result: json.response, transcript: json.transcript } };
+  } catch (e) {
+    return { data: { error: `Could not reach agent backend at ${AGENT_BACKEND_URL}: ${e.message}` } };
+  }
+};
+
 export const functions = {
-  invoke: async (fnName) => {
+  invoke: async (fnName, payload) => {
+    if (fnName === "groqComplete") {
+      return callAgentBackend(payload || {});
+    }
     console.warn(`[local mode] functions.invoke("${fnName}") skipped — no backend connected.`);
     return { data: { error: `Function "${fnName}" is not available in local mode.` } };
   },
-};
-
-// --- Direct Groq API call, replacing the old base44 backend function ---
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-
-const callGroqComplete = async ({ prompt, response_json_schema, add_context_from_internet }) => {
-  if (!GROQ_API_KEY) {
-    return { data: { error: "Missing VITE_GROQ_API_KEY in .env.local" } };
-  }
-
-  if (add_context_from_internet) {
-    console.warn("[local mode] add_context_from_internet is not supported — Groq direct calls have no web access.");
-  }
-
-  let systemPrompt = "You are a helpful assistant.";
-  if (response_json_schema) {
-    systemPrompt += ` Respond ONLY with valid JSON matching this schema, no markdown fences, no extra text: ${JSON.stringify(response_json_schema)}`;
-  }
-
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ],
-      ...(response_json_schema ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    return { data: { error: `Groq API error: ${err}` } };
-  }
-
-  const json = await res.json();
-  const content = json.choices?.[0]?.message?.content || "";
-
-  if (response_json_schema) {
-    try {
-      return { data: JSON.parse(content) };
-    } catch {
-      return { data: { error: "Failed to parse JSON from model output", raw: content } };
-    }
-  }
-
-  return { data: { result: content.trim() } };
-};
-
-functions.invoke = async (fnName, payload) => {
-  if (fnName === "groqComplete") {
-    return callGroqComplete(payload || {});
-  }
-  console.warn(`[local mode] functions.invoke("${fnName}") skipped — no backend connected.`);
-  return { data: { error: `Function "${fnName}" is not available in local mode.` } };
 };
