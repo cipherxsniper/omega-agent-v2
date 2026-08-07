@@ -1,3 +1,4 @@
+import os
 import hashlib
 import hmac
 import math
@@ -8,7 +9,10 @@ class OM109Algorithm:
     Proprietary OM109 algorithm for NFT valuation, uniqueness, and cryptographic authentication.
     """
     
-    def __init__(self, secret_key: str = "OMEGA_AGENTS_TOP_SECRET_109"):
+    def __init__(self, secret_key: str = None):
+        secret_key = secret_key or os.environ.get("OM109_SECRET_KEY")
+        if not secret_key:
+            raise RuntimeError("OM109_SECRET_KEY not set in environment — no hardcoded fallback.")
         self.secret_key = secret_key.encode('utf-8')
         
     def generate_token_signature(self, metadata: dict) -> str:
