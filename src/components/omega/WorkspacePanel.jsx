@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
+import { stepsFromTranscript } from "@/lib/transcriptAdapter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Globe, Terminal, FileCode, ListChecks, Loader2, CheckCircle,
@@ -23,24 +24,30 @@ const TOOL_ICONS = {
   none: Code,
 };
 
-export default function WorkspacePanel({ conversationId, isThinking, onClose }) {
+export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript }) {
   const [activeTab, setActiveTab] = useState("actions");
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (transcript) {
+      setSteps(stepsFromTranscript(transcript));
+      setLoading(false);
+      return;
+    }
     if (conversationId) loadSteps(conversationId);
-  }, [conversationId, isThinking]);
+  }, [conversationId, isThinking, transcript]);
 
-  // Realtime subscribe to steps
+  // Realtime subscribe to steps (legacy path — inactive while transcript is supplied directly)
   useEffect(() => {
+    if (transcript) return;
     if (!conversationId) return;
     const unsub = base44.entities.AgentStep.subscribe((event) => {
       if (event.data?.conversation_id !== conversationId) return;
       loadSteps(conversationId);
     });
     return unsub;
-  }, [conversationId]);
+  }, [conversationId, transcript]);
 
   const loadSteps = async (convId) => {
     setLoading(true);

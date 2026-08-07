@@ -292,7 +292,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     const responseTime = Date.now() - startTime;
 
     // Parse response
-    let content = typeof response === "string" ? response : response.response || JSON.stringify(response);
+    let content = typeof response === "string" ? response : response.result || response.response || JSON.stringify(response);
     const reasoning = typeof response === "object" ? response.reasoning : null;
     const sources = typeof response === "object" && response.sources ? response.sources : [];
 
@@ -343,6 +343,7 @@ Return 3-7 steps. Be specific to the actual task.`;
       content,
       reasoning_chain: reasoning,
       sources,
+      transcript: response.transcript || null,
       job_id: job?.id,
       metadata: {
         model: "omega-1.0",
@@ -479,7 +480,11 @@ Return 3-7 steps. Be specific to the actual task.`;
 
         {/* Workspace panel — always visible (Manus style) */}
         <div className="w-[420px] shrink-0 hidden lg:block">
-          <WorkspacePanel conversationId={activeConversationId} isThinking={isThinking} />
+          <WorkspacePanel
+            conversationId={activeConversationId}
+            isThinking={isThinking}
+            transcript={[...messages].reverse().find((m) => m.role === "assistant" && m.transcript)?.transcript}
+          />
         </div>
       </div>
 

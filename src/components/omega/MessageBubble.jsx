@@ -92,6 +92,17 @@ function MessageMarkdown({ content }) {
 export default function MessageBubble({ message }) {
   const [showReasoning, setShowReasoning] = useState(false);
   const [showSources, setShowSources] = useState(false);
+  const [msgCopied, setMsgCopied] = useState(false);
+
+  const handleCopyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content || "");
+      setMsgCopied(true);
+      setTimeout(() => setMsgCopied(false), 1500);
+    } catch (e) {
+      // clipboard unavailable — button just won't confirm
+    }
+  };
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -139,6 +150,22 @@ export default function MessageBubble({ message }) {
             )}
           </div>
         </div>
+
+        {/* Copy message */}
+        <button
+          onClick={handleCopyMessage}
+          className={`mt-1 flex items-center gap-1 text-[11px] text-white/25 hover:text-teal-400 transition-colors ${isUser ? "ml-auto" : ""}`}
+        >
+          {msgCopied ? (
+            <>
+              <Check className="w-3 h-3" /> Copied
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" /> Copy
+            </>
+          )}
+        </button>
 
         {/* Reasoning Chain */}
         {message.reasoning_chain && !isUser && (
