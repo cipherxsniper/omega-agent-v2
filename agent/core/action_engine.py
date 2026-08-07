@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import time
+import py_compile
+import os
 from typing import Dict, Any, List, Optional, Set
 from dataclasses import dataclass, field
 
@@ -12,6 +14,7 @@ class Action:
     preconditions: Dict[str, Any] = field(default_factory=dict)
     effects: Dict[str, Any] = field(default_factory=dict)
     cost: float = 1.0
+    target: Optional[str] = None  # real file path this action operates on, if any
 
 @dataclass
 class ActionNode:
@@ -180,6 +183,149 @@ class ActionExecutor:
                 
         return execution_trace
 
+    async def _dispatch_action(self, node: ActionNode) -> tuple:
+        """
+        Real per-action execution. No fake success — each branch does
+        something genuine and reports what actually happened.
+        """
+        name = node.action.name
+        target = node.action.target
+
+        if name == "read_file":
+            if not target:
+                return False, {"error": "read_file called with no target path set"}
+            if not os.path.exists(target):
+                return False, {"error": f"File not found: {target}"}
+            with open(target, "r", errors="replace") as f:
+                content = f.read()
+            return True, {"status_code": "OK", "bytes_read": len(content), "path": target}
+
+        elif name == "compile_code":
+            if not target:
+                return False, {"error": "compile_code called with no target path set"}
+            if not os.path.exists(target):
+                return False, {"error": f"File not found: {target}"}
+            try:
+                py_compile.compile(target, doraise=True)
+                return True, {"status_code": "OK", "compiled": target}
+            except py_compile.PyCompileError as e:
+                return False, {"error": f"Compilation failed: {e}"}
+
+        elif name == "write_file":
+            if not target:
+                return False, {"error": "write_file called with no target path set"}
+            file_content = node.parameters.get("content")
+            if file_content is None:
+                return False, {"error": "write_file called with no 'content' parameter"}
+            try:
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w") as f:
+                    f.write(file_content)
+                return True, {"status_code": "OK", "bytes_written": len(file_content), "path": target}
+            except Exception as e:
+                return False, {"error": f"Write failed: {e}"}
+
+        elif name == "run_bash":
+            cmd = node.parameters.get("command")
+            if not cmd:
+                return False, {"error": "run_bash called with no 'command' parameter"}
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True, timeout=30
+                )
+                stdout = proc.stdout[-4000:] if proc.stdout else ""
+                stderr = proc.stderr[-4000:] if proc.stderr else ""
+                success = proc.returncode == 0
+                return success, {
+                    "status_code": proc.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "command": cmd,
+                }
+            except subprocess.TimeoutExpired:
+                return False, {"error": f"Command timed out after 30s: {cmd}"}
+            except Exception as e:
+                return False, {"error": f"Execution failed: {e}"}
+
+        elif name == "list_dir":
+            if not target:
+                return False, {"error": "list_dir called with no target path set"}
+            if not os.path.isdir(target):
+                return False, {"error": f"Not a directory: {target}"}
+            entries = os.listdir(target)
+            return True, {"status_code": "OK", "path": target, "entries": entries}
+
+        elif name == "edit_file":
+            if not target:
+                return False, {"error": "edit_file called with no target path set"}
+            old_str = node.parameters.get("old_str")
+            new_str = node.parameters.get("new_str", "")
+            if old_str is None:
+                return False, {"error": "edit_file requires 'old_str'"}
+            if not os.path.exists(target):
+                return False, {"error": f"File not found: {target}"}
+            with open(target, "r") as f:
+                content_ = f.read()
+            count = content_.count(old_str)
+            if count == 0:
+                return False, {"error": "old_str not found in file"}
+            if count > 1:
+                return False, {"error": f"old_str matches {count} times, must be unique"}
+            content_ = content_.replace(old_str, new_str)
+            with open(target, "w") as f:
+                f.write(content_)
+            return True, {"status_code": "OK", "path": target, "replaced": True}
+
+        elif name == "git_status":
+            try:
+                import subprocess
+                proc = subprocess.run(["git", "status", "--short"], cwd=target or ".",
+                                       capture_output=True, text=True, timeout=15)
+                return proc.returncode == 0, {"status_code": proc.returncode,
+                                               "stdout": proc.stdout, "stderr": proc.stderr}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "git_diff":
+            try:
+                import subprocess
+                proc = subprocess.run(["git", "diff"], cwd=target or ".",
+                                       capture_output=True, text=True, timeout=15)
+                return proc.returncode == 0, {"status_code": proc.returncode,
+                                               "stdout": proc.stdout[-4000:], "stderr": proc.stderr}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "git_commit":
+            msg = node.parameters.get("message")
+            if not msg:
+                return False, {"error": "git_commit requires 'message'"}
+            try:
+                import subprocess
+                add = subprocess.run(["git", "add", "-A"], cwd=target or ".",
+                                      capture_output=True, text=True, timeout=15)
+                proc = subprocess.run(["git", "commit", "-m", msg], cwd=target or ".",
+                                       capture_output=True, text=True, timeout=15)
+                return proc.returncode == 0, {"status_code": proc.returncode,
+                                               "stdout": proc.stdout, "stderr": proc.stderr}
+            except Exception as e:
+                return False, {"error": str(e)}
+
+        elif name == "deploy_canary":
+            # Honestly not implemented yet — no real deploy mechanism exists.
+            # Reporting success here would be exactly the kind of fake
+            # logic we're eliminating. Fail loud instead.
+            logger.warning(
+                "deploy_canary called but has no real implementation — "
+                "refusing to report fake success."
+            )
+            return False, {"error": "deploy_canary is not implemented (stub, honestly reported)"}
+
+        else:
+            logger.warning(f"Unknown action '{name}' — no real handler exists for it.")
+            return False, {"error": f"No handler implemented for action '{name}'"}
+
     async def _execute_with_retry(self, node: ActionNode, state: Dict[str, Any], max_retries: int = 3) -> ExecutionResult:
         start_time = time.time()
         attempt = 0
@@ -189,12 +335,7 @@ class ActionExecutor:
             attempt += 1
             try:
                 logger.info(f"Executing '{node.action.name}' (Attempt {attempt}/{max_retries})")
-                # Simulate specialized processing hook based on name
-                await asyncio.sleep(0.1)
-                
-                # Mock high-reliability operation logic
-                success = True
-                output = {"status_code": "OK", "timestamp": time.time()}
+                success, output = await self._dispatch_action(node)
                 
                 duration = time.time() - start_time
                 return ExecutionResult(

@@ -192,3 +192,7 @@ class LeaderboardManager:
 
     def get_leaderboard(self) -> List[Dict[str, Any]]:
         return self.leaders
+
+# --- Wire real Groq-backed grading ---
+from agent.oracle.grading_patch import evaluate_task_output_real
+OracleGrader.evaluate_task_output_real = evaluate_task_output_real

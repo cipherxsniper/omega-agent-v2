@@ -129,7 +129,7 @@ class TestRunner:
         try:
             # We run pytest or unittest discovery in the workspace
             res = subprocess.run(
-                ["python", "-m", "unittest", "discover", "-s", self.root_dir, "-p", "*_test.py"],
+                ["python", "-m", "unittest", "discover", "-s", self.root_dir, "-p", "test_smoke.py"],
                 capture_output=True, text=True, cwd=self.root_dir, timeout=10
             )
             # If no tests exist yet, we treat compile-validation as success

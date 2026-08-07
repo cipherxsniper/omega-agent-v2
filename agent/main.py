@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import time
 import logging
 import signal
 from typing import Dict, Any
@@ -20,11 +21,13 @@ logger = logging.getLogger("OmegaMain")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Import Core Architectural Blocks
-from agent.core.omega_brain import OmegaBrain
+from agent.core.omega_brain_v2 import OmegaBrainV2
 from agent.core.perception import MultiModalPerception, RealTimeMonitor
 from agent.core.action_engine import ActionPlanner, ActionExecutor, ActionValidator, SideEffectAnalyzer, Action
 from agent.core.self_engineer import CodeAnalyzer, PerformanceProfiler, ImprovementProposer, SafeDeployer, TestRunner, GitIntegration
 from agent.oracle.grading_system import OracleGrader, GradeHistory, BenchmarkSuite, LeaderboardManager
+from agent.oracle.grading_patch import evaluate_task_output_real
+OracleGrader.evaluate_task_output_real = evaluate_task_output_real
 
 class OmegaAgentSystem:
     """
@@ -32,14 +35,15 @@ class OmegaAgentSystem:
     Coordinates loop updates, metrics watching, action triggers, and self-modification.
     """
     def __init__(self):
-        self.brain = OmegaBrain()
+        self.brain = OmegaBrainV2(sandbox_root=os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../sandbox")))
         self.perception = MultiModalPerception()
         self.monitor = RealTimeMonitor(self.perception, polling_interval=1.0)
         
         # Action space configurations
         self.actions = [
-            Action(name="read_file", preconditions={"file_exists": True}, effects={"file_read": True}, cost=1.0),
-            Action(name="compile_code", preconditions={"file_read": True}, effects={"compiled": True}, cost=2.0),
+            Action(name="read_file", preconditions={"file_exists": True}, effects={"file_read": True}, cost=1.0, target="agent/core/omega_brain.py"),
+            Action(name="compile_code", preconditions={"file_read": True}, effects={"compiled": True}, cost=2.0, target="agent/core/omega_brain.py"),
             Action(name="deploy_canary", preconditions={"compiled": True}, effects={"canary_active": True}, cost=3.0)
         ]
         self.planner = ActionPlanner(self.actions)
@@ -63,6 +67,14 @@ class OmegaAgentSystem:
         
         self.is_running = False
 
+        # --- Real goal queue instead of one frozen task ---
+        self.task_queue = [
+            "Ensure system codebase is parsed and compiled.",
+            "Review agent/core/action_engine.py for unused imports or dead code.",
+            "Summarize the current state of agent/main.py in one sentence.",
+        ]
+        self._task_index = 0
+
     async def start(self):
         self.is_running = True
         logger.info("Initializing OMEGA AGENT ASI core components...")
@@ -71,7 +83,10 @@ class OmegaAgentSystem:
         await self.monitor.start()
         
         # Warmup reasoning databases and memories
-        await self.brain.memory.store("system_status", "ACTIVE", mem_type="semantic", importance=0.9)
+        try:
+            await self.brain.memory.store("system_status", "ACTIVE", mem_type="semantic", importance=0.9)
+        except (AttributeError, TypeError) as e:
+            logger.warning(f"OmegaBrainV2 memory API differs — skipping legacy warmup call ({e}).")
         
         logger.info("System fully booted. Entering continuous operational loop.")
         await self._main_loop()
@@ -82,7 +97,10 @@ class OmegaAgentSystem:
         await self.monitor.stop()
         
         # Consolidate running memory states before quitting
-        await self.brain.memory.consolidate_memories()
+        try:
+            await self.brain.memory.consolidate_memories()
+        except (AttributeError, TypeError):
+            pass
         logger.info("OMEGA AGENT offline. State consolidated safely.")
 
     async def _main_loop(self):
@@ -93,16 +111,21 @@ class OmegaAgentSystem:
             
             try:
                 # 1. Run a sample scenario simulation to demonstrate integrated capabilities
+                cycle_start = time.monotonic()
                 world_state = await self.perception.ingest("structured", {
                     "file_exists": True,
                     "compiled": False,
-                    "network_latency": 15.2,
-                    "system_load": 0.38
+                    "network_latency": getattr(self, "_last_cycle_ms", 0.0),
+                    "system_load": os.getloadavg()[0]
                 })
                 
                 # 2. Query brain for next runnable plan goals
-                task_resp = await self.brain.process_task("Ensure system codebase is parsed and compiled.", world_state.inputs)
-                logger.info(f"Brain reasoning strategy: {task_resp['reasoning']['solution_strategy']}")
+                current_task = self.task_queue[self._task_index % len(self.task_queue)]
+                self._task_index += 1
+                task_resp = await self.brain.process_task(current_task, world_state.inputs)
+                strategy = task_resp.get('reasoning', {}).get('solution_strategy',
+                    task_resp.get('reasoning', {}).get('strategy', 'unknown'))
+                logger.info(f"Brain reasoning strategy: {strategy}")
                 
                 # 3. Create execution plan
                 start_state = {"file_exists": True, "compiled": False}
@@ -128,17 +151,20 @@ class OmegaAgentSystem:
                         logger.info(f"Canary self-update success state: {deploy_ok}")
                         
                     # 5. Evaluate results against Oracle Grader rubrics
-                    grade = self.grader.evaluate_performance({
-                        "accuracy": 95.0,
-                        "efficiency": 90.0,
-                        "safety": 100.0,
-                        "alignment": 98.0,
-                        "financial_impact": 80.0
-                    }, notes=f"Automatic scoring profile for step completion cycle {loop_counter}")
+                    output_summary = "; ".join(
+                        f"{r.action_name}: {'OK' if r.success else 'FAILED - ' + str(r.error)}"
+                        for r in results
+                    ) if results else "no actions executed"
+                    grade = await self.grader.evaluate_task_output_real(
+                        "Ensure system codebase is parsed and compiled.",
+                        output_summary,
+                        notes=f"Automatic scoring profile for step completion cycle {loop_counter}"
+                    )
                     
                     self.history.record_grade(grade)
                     self.leaderboard.update_leaderboard(f"run_loop_{loop_counter}", grade)
                     
+                self._last_cycle_ms = (time.monotonic() - cycle_start) * 1000
                 # Safe rate limiter
                 await asyncio.sleep(5.0)
                 
