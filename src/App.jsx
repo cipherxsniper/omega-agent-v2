@@ -11,7 +11,7 @@ function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router basename="/omega-agent">
+        <Router basename="/omega-agent-v2">
           <ScrollToTop />
           <Routes>
             <Route path="/" element={<Home />} />
