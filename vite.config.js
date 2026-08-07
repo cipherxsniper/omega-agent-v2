@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import path from 'path'
 
 export default defineConfig({
-  base: '/omega-agent/',
+  base: '/omega-agent-v2/',
   plugins: [react()],
   resolve: {
     alias: {
