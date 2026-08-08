@@ -379,6 +379,28 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                         + "\n".join(failed_calls)
                     )
 
+                # Ground any counting/verification commands the same way -
+                # ensures claimed numbers in the final response actually
+                # came from a real tool call, not the model's guess.
+                verified_data = []
+                for entry in transcript:
+                    if entry.get("role") != "tool":
+                        continue
+                    result = entry.get("result", {})
+                    output = result.get("output", {}) if isinstance(result, dict) else {}
+                    cmd = output.get("command", "") if isinstance(output, dict) else ""
+                    if "wc -l" in cmd or ("find" in cmd and "-type f" in cmd):
+                        stdout = output.get("stdout", "").strip()
+                        if stdout:
+                            verified_data.append(f"- step {entry.get('step')}: `{cmd}` -> {stdout}")
+
+                if verified_data:
+                    final_content += (
+                        "\n\n[SYSTEM-VERIFIED DATA - use these exact figures, "
+                        "do not restate different numbers]\n"
+                        + "\n".join(verified_data)
+                    )
+
                 transcript.append({"step": step, "role": "assistant", "content": final_content, "final": True})
                 if signed_log:
                     sign_event(signed_log, event_type="agent_final", data={"step": step, "content": final_content[:1000]})
