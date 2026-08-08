@@ -481,6 +481,7 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
+                    "name": tc["function"]["name"],
                     "content": result_json,
                 })
         else:
