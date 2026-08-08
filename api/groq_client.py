@@ -30,6 +30,23 @@ MODEL_TIER_STACK = [
     "llama-3.1-8b-instant",
 ]
 
+# Per-model TPM ceilings on our current Groq tier (on_demand). Used to
+# skip a tier pre-flight when the request clearly won't fit, instead of
+# burning a call to discover that. Conservative/approximate - Groq's
+# actual limit is the source of truth, this just avoids wasted round trips.
+MODEL_TPM_LIMITS = {
+    "llama-3.1-8b-instant": 6000,
+}
+
+def _estimate_tokens(messages, tools=None):
+    """Rough token estimate (chars/4) for pre-flight TPM checks. Not
+    exact - just needs to catch requests that are way over a small
+    model's ceiling before we send them."""
+    total_chars = sum(len(str(m)) for m in messages)
+    if tools:
+        total_chars += len(str(tools))
+    return total_chars // 4
+
 logger = logging.getLogger("GroqClient")
 
 _STANDARD_MSG_KEYS = {"role", "content", "tool_calls", "tool_call_id", "name"}
@@ -95,6 +112,18 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
     last_error = None
     for idx in range(_tier_start_index, len(tier)):
         current_model = tier[idx]
+
+        tpm_limit = MODEL_TPM_LIMITS.get(current_model)
+        if tpm_limit is not None:
+            est = _estimate_tokens(messages, tools)
+            if est > tpm_limit:
+                logger.warning(
+                    f"{current_model} skipped: est. {est} tokens exceeds "
+                    f"{tpm_limit} TPM limit - would fail regardless of retries"
+                )
+                last_error = f"{current_model}: skipped, request (~{est}t) exceeds {tpm_limit} TPM"
+                continue
+
         _check_rate_guard()
         payload = {
             "model": current_model,
