@@ -280,8 +280,15 @@ class ActionExecutor:
                 return False, {"error": "run_bash called with no 'command' parameter"}
             try:
                 import subprocess
+                # Match list_dir/read_file's path resolution: this process's
+                # actual cwd is whatever directory the server happened to be
+                # launched from, which drifts across restarts. Anchor every
+                # run_bash call to the same OMEGA_WORKSPACE root those tools
+                # already use, so relative paths behave identically across
+                # every tool instead of only working in list_dir/read_file.
                 proc = subprocess.run(
-                    cmd, shell=True, capture_output=True, text=True, timeout=30
+                    cmd, shell=True, capture_output=True, text=True, timeout=30,
+                    cwd=self.OMEGA_WORKSPACE,
                 )
                 stdout = proc.stdout[-4000:] if proc.stdout else ""
                 stderr = proc.stderr[-4000:] if proc.stderr else ""
