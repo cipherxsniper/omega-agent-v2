@@ -367,10 +367,26 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
 
                 transcript.append({"step": step, "role": "tool", "tool_call_id": tc["id"], "result": result})
 
+                # Cap tool-result size before it enters history. This is
+                # byte-based, not tied to today's file/repo counts, so it
+                # keeps working as the empire grows and a single tool call
+                # (e.g. reading a large source file) can't blow the token
+                # budget on its own. Full result still goes in `transcript`
+                # (line above) and signed_log - only what feeds back into
+                # the model's context gets capped.
+                MAX_TOOL_RESULT_CHARS = 3000
+                result_json = json.dumps(result, default=str)
+                if len(result_json) > MAX_TOOL_RESULT_CHARS:
+                    result_json = (
+                        result_json[:MAX_TOOL_RESULT_CHARS]
+                        + f"... [truncated, {len(result_json)} chars total - "
+                        + "full result available in transcript/signed_log]"
+                    )
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": json.dumps(result, default=str),
+                    "content": result_json,
                 })
         else:
             transcript.append({"step": max_steps, "role": "system", "content": f"Stopped: hit max_steps ({max_steps}) without model finishing."})

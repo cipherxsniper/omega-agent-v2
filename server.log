@@ -21,40 +21,20 @@ INFO:OmegaActionEngine:Executing 'read_file' (Attempt 1/3)
 INFO:OmegaActionEngine:Executing 'read_file' (Attempt 1/3)
 WARNING:GroqClient:qwen/qwen3.6-27b rate limited - falling through to next tier (1/5 tried)
 INFO:GroqClient:Served by fallback tier: llama-3.3-70b-versatile (tier index 1)
+INFO:OmegaActionEngine:Executing 'write_todos' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
+INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
 WARNING:GroqClient:qwen/qwen3.6-27b rate limited - falling through to next tier (1/5 tried)
-WARNING:GroqClient:llama-3.3-70b-versatile rate limited (retry in 2s) - falling through to next tier (2/5 tried)
+WARNING:GroqClient:llama-3.3-70b-versatile failed (413): {"error":{"message":"Request too large for model `llama-3.3-70b-versatile` in organization `org_01kzatnd1sety9m1caten5spf7` service tier `on_demand` on tokens per minute (TPM): Limit 12000, Requested 
 WARNING:GroqClient:openai/gpt-oss-120b failed (400): {"error":{"message":"failed to template request: failed to render tokenized output: failed to render tokens with harmony: HarmonyError: EncodingError: Message=render failed: Tools should have a name!"
 WARNING:GroqClient:openai/gpt-oss-20b failed (400): {"error":{"message":"failed to template request: failed to render tokenized output: failed to render tokens with harmony: HarmonyError: EncodingError: Message=render failed: Tools should have a name!"
-INFO:GroqClient:Served by fallback tier: llama-3.1-8b-instant (tier index 4)
-INFO:OmegaActionEngine:Executing 'compile_code' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'run_tests' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'write_file' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'word_count' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_status' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_commit' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_log' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'write_todos' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'read_todos' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'memory_search' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'compile_code' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'run_tests' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'write_file' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'list_dir' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'word_count' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_status' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_commit' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'git_log' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'write_todos' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'read_todos' (Attempt 1/3)
-INFO:OmegaActionEngine:Executing 'memory_search' (Attempt 1/3)
-INFO:GroqClient:Groq calls this hour: 10/120
-WARNING:GroqClient:qwen/qwen3.6-27b rate limited - falling through to next tier (1/5 tried)
-WARNING:GroqClient:llama-3.3-70b-versatile rate limited (retry in 7s) - falling through to next tier (2/5 tried)
-WARNING:GroqClient:openai/gpt-oss-120b failed (400): {"error":{"message":"failed to template request: failed to render tokenized output: failed to render tokens with harmony: HarmonyError: EncodingError: Message=render failed: Tools should have a name!"
-WARNING:GroqClient:openai/gpt-oss-20b failed (400): {"error":{"message":"failed to template request: failed to render tokenized output: failed to render tokens with harmony: HarmonyError: EncodingError: Message=render failed: Tools should have a name!"
-WARNING:GroqClient:llama-3.1-8b-instant failed (413): {"error":{"message":"Request too large for model `llama-3.1-8b-instant` in organization `org_01kzatnd1sety9m1caten5spf7` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Requested 7008
-ERROR:OmegaChatServer:Agent task failed: All 5 model tiers exhausted or failed. Last error: llama-3.1-8b-instant: {"error":{"message":"Request too large for model `llama-3.1-8b-instant` in organization `org_01kzatnd1sety9m1caten5spf7` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Requested 7008, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}
+WARNING:GroqClient:llama-3.1-8b-instant skipped: est. 21996 tokens exceeds 6000 TPM limit - would fail regardless of retries
+ERROR:OmegaChatServer:Agent task failed: All 5 model tiers exhausted or failed. Last error: llama-3.1-8b-instant: skipped, request (~21996t) exceeds 6000 TPM
 Traceback (most recent call last):
   File "/data/data/com.termux/files/home/omega-agent-v2/agent/chat_server.py", line 44, in chat
     transcript = run_agent_task(
@@ -68,8 +48,7 @@ Traceback (most recent call last):
     ...<3 lines>...
         return_message=True,
     )
-  File "/data/data/com.termux/files/home/omega-agent-v2/api/groq_client.py", line 151, in chat_completion
+  File "/data/data/com.termux/files/home/omega-agent-v2/api/groq_client.py", line 180, in chat_completion
     raise RuntimeError(f"All {len(tier)} model tiers exhausted or failed. Last error: {last_error}")
-RuntimeError: All 5 model tiers exhausted or failed. Last error: llama-3.1-8b-instant: {"error":{"message":"Request too large for model `llama-3.1-8b-instant` in organization `org_01kzatnd1sety9m1caten5spf7` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Requested 7008, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}
-
-INFO:werkzeug:127.0.0.1 - - [07/Aug/2026 19:12:30] "[35m[1mPOST /api/chat HTTP/1.1[0m" 500 -
+RuntimeError: All 5 model tiers exhausted or failed. Last error: llama-3.1-8b-instant: skipped, request (~21996t) exceeds 6000 TPM
+INFO:werkzeug:127.0.0.1 - - [07/Aug/2026 19:14:51] "[35m[1mPOST /api/chat HTTP/1.1[0m" 500 -
