@@ -35,8 +35,9 @@ class OmegaAgentSystem:
     Coordinates loop updates, metrics watching, action triggers, and self-modification.
     """
     def __init__(self):
-        self.brain = OmegaBrainV2(sandbox_root=os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "../sandbox")))
+        self.brain = OmegaBrainV2(sandbox_root=os.environ.get(
+            "OMEGA_SANDBOX_ROOT",
+            os.path.expanduser("~/omega_workspace")))
         self.perception = MultiModalPerception()
         self.monitor = RealTimeMonitor(self.perception, polling_interval=1.0)
         

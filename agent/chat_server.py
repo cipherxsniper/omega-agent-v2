@@ -45,7 +45,13 @@ def chat():
             message,
             max_steps=max_steps,
             signed_log=LOG_PATH,
-            cwd_hint=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+            cwd_hint=os.path.expanduser("~/omega_workspace") + (
+                " — this contains all Omega repos as subdirectories: "
+                "OMEGAOPS.AI, omega, Omega-Ecosystem-App, omega-art-studio, "
+                "omega-fintech, omega-financial-core, Omega-Core, "
+                "omega-agent-v2, Omega_Finacial_Network. Use paths like "
+                "'OMEGAOPS.AI/omega_v10.py' relative to this root."
+            ),
         )
     except Exception as e:
         logger.error(f"Agent task failed: {e}", exc_info=True)

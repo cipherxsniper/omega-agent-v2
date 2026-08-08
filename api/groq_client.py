@@ -19,7 +19,31 @@ DEFAULT_MODEL = "qwen/qwen3.6-27b"
 FALLBACK_MODEL = "openai/gpt-oss-120b"  # stable, use if qwen3.6 errors/deprecates
 FAST_MODEL = "openai/gpt-oss-20b"  # llama-3.1-8b-instant deprecated Aug 16 2026
 
+# Tiered fallback stack, in priority order. Each has a separate daily quota
+# on Groq, so if one tier is rate-limited for the day, we fall through to
+# the next rather than blocking on a single model's TPD cap.
+MODEL_TIER_STACK = [
+    "qwen/qwen3.6-27b",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+]
+
 logger = logging.getLogger("GroqClient")
+
+_STANDARD_MSG_KEYS = {"role", "content", "tool_calls", "tool_call_id", "name"}
+
+def _sanitize_messages(messages):
+    """Strip non-standard fields (e.g. 'reasoning' echoed back by some
+    models like qwen) before replaying history against a different
+    model tier. Groq's schema validation rejects unknown message
+    fields on some models (llama-3.x), which was silently killing
+    the whole fallback stack on 429s."""
+    clean = []
+    for m in messages:
+        clean.append({k: v for k, v in m.items() if k in _STANDARD_MSG_KEYS})
+    return clean
 MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "120"))
 _call_timestamps = []
 
@@ -39,28 +63,8 @@ def _check_rate_guard():
         logger.info(f"Groq calls this hour: {len(_call_timestamps)}/{MAX_CALLS_PER_HOUR}")
 
 
-def chat_completion(messages, model=DEFAULT_MODEL, temperature=0.3, max_tokens=2048,
-                     tools=None, reasoning_effort=None, return_message=False):
-    """
-    return_message=False (default, unchanged behavior): returns just the
-    content string, for existing callers.
-    return_message=True: returns the full message dict (includes tool_calls
-    if the model made any) — needed for real agentic tool-use loops.
-    """
-    _check_rate_guard()
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if tools:
-        payload["tools"] = tools
-    if reasoning_effort:
-        # qwen3 models: 'none' or 'default'. gpt-oss models: 'low'/'medium'/'high'.
-        payload["reasoning_effort"] = reasoning_effort
-
-    resp = requests.post(
+def _post_once(payload):
+    return requests.post(
         GROQ_API_URL,
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -70,35 +74,78 @@ def chat_completion(messages, model=DEFAULT_MODEL, temperature=0.3, max_tokens=2
         timeout=30,
     )
 
-    import re
-    max_rate_retries = 5
-    rate_retry = 0
-    while resp.status_code == 429 and rate_retry < max_rate_retries:
-        rate_retry += 1
-        wait_match = re.search(r"try again in ([\d.]+)s", resp.text)
-        wait_s = float(wait_match.group(1)) + 1.5 if wait_match else 15.0
-        logger.warning(f"Rate limited (attempt {rate_retry}/{max_rate_retries}), waiting {wait_s:.1f}s...")
-        time.sleep(wait_s)
-        resp = requests.post(
-            GROQ_API_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
-    if resp.status_code == 429:
-        raise RuntimeError(f"Groq still rate limited after {max_rate_retries} retries: {resp.text}")
-    if not resp.ok:
-        # Preview model may go away without notice — fall back once automatically.
-        if model == DEFAULT_MODEL:
-            logger.warning(f"{DEFAULT_MODEL} failed ({resp.status_code}), retrying with {FALLBACK_MODEL}")
-            return chat_completion(messages, model=FALLBACK_MODEL, temperature=temperature,
-                                    max_tokens=max_tokens, tools=tools, return_message=return_message)
-        raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text}")
 
-    message = resp.json()["choices"][0]["message"]
-    if return_message:
-        return message
-    return message["content"]
+def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
+                     tools=None, reasoning_effort=None, return_message=False,
+                     _tier_start_index=0):
+    """
+    return_message=False (default): returns just the content string.
+    return_message=True: returns the full message dict (includes tool_calls).
+
+    Walks MODEL_TIER_STACK on rate-limit (429). A per-model daily-quota hit
+    means retrying the SAME model is pointless until the quota window
+    resets, so on 429 we move to the next tier immediately.
+    """
+    import re
+
+    tier = MODEL_TIER_STACK if model is None else [model] + [
+        m for m in MODEL_TIER_STACK if m != model
+    ]
+
+    last_error = None
+    for idx in range(_tier_start_index, len(tier)):
+        current_model = tier[idx]
+        _check_rate_guard()
+        payload = {
+            "model": current_model,
+            "messages": _sanitize_messages(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+        if reasoning_effort:
+            # Different model families support different reasoning_effort
+            # vocab (or none at all). Normalize per-model here so every
+            # caller can just pass one value and the tier stack keeps working
+            # as new models are added.
+            if current_model.startswith("qwen/"):
+                payload["reasoning_effort"] = reasoning_effort  # 'none' or 'default'
+            elif current_model.startswith("openai/gpt-oss"):
+                # gpt-oss only accepts low/medium/high - map anything else to medium
+                payload["reasoning_effort"] = reasoning_effort if reasoning_effort in (
+                    "low", "medium", "high"
+                ) else "medium"
+            # llama-3.x models: reasoning_effort not supported at all - omit it
+
+        resp = _post_once(payload)
+
+        if resp.status_code == 429:
+            wait_match = re.search(r"try again in ([\d.]+)s", resp.text)
+            wait_s = float(wait_match.group(1)) if wait_match else None
+            is_daily_quota = "tokens per day" in resp.text or "TPD" in resp.text
+            if is_daily_quota or idx < len(tier) - 1:
+                logger.warning(
+                    f"{current_model} rate limited"
+                    + (f" (retry in {wait_s:.0f}s)" if wait_s else "")
+                    + f" - falling through to next tier ({idx + 1}/{len(tier)} tried)"
+                )
+                last_error = f"{current_model}: {resp.text}"
+                continue
+            else:
+                time.sleep(wait_s + 1.5 if wait_s else 15.0)
+                resp = _post_once(payload)
+
+        if not resp.ok:
+            logger.warning(f"{current_model} failed ({resp.status_code}): {resp.text[:200]}")
+            last_error = f"{current_model}: {resp.text}"
+            continue
+
+        message = resp.json()["choices"][0]["message"]
+        if idx > 0:
+            logger.info(f"Served by fallback tier: {current_model} (tier index {idx})")
+        if return_message:
+            return message
+        return message["content"]
+
+    raise RuntimeError(f"All {len(tier)} model tiers exhausted or failed. Last error: {last_error}")

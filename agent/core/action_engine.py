@@ -188,6 +188,42 @@ class ActionExecutor:
                 
         return execution_trace
 
+    OMEGA_WORKSPACE = os.path.expanduser("~/omega_workspace")
+    OMEGA_ROOT = os.path.realpath(OMEGA_WORKSPACE)
+
+    @classmethod
+    def _compute_allowed_roots(cls):
+        # omega_workspace is a hub of symlinks to the real repo folders.
+        # realpath() follows symlinks to their target, so we must allow
+        # both the workspace root AND the real location each symlink
+        # points to - otherwise every symlinked repo gets rejected.
+        roots = {cls.OMEGA_ROOT, os.path.realpath(os.path.expanduser("~/.omega"))}
+        try:
+            for entry in os.listdir(cls.OMEGA_WORKSPACE):
+                full = os.path.join(cls.OMEGA_WORKSPACE, entry)
+                roots.add(os.path.realpath(full))
+        except FileNotFoundError:
+            pass
+        return roots
+
+    def _resolve_target(self, target: str) -> str:
+        # Relative paths from the model should resolve against the
+        # workspace root, not this process's actual cwd.
+        if not os.path.isabs(target):
+            return os.path.join(self.OMEGA_WORKSPACE, target)
+        return target
+
+    def _path_allowed(self, target: str) -> bool:
+        if not target:
+            return False
+        resolved = self._resolve_target(target)
+        real = os.path.realpath(os.path.abspath(resolved))
+        allowed_roots = self.__class__._compute_allowed_roots()
+        for allowed in allowed_roots:
+            if real == allowed or real.startswith(allowed + os.sep):
+                return True
+        return False
+
     async def _dispatch_action(self, node: ActionNode) -> tuple:
         """
         Real per-action execution. No fake success — each branch does
@@ -195,6 +231,14 @@ class ActionExecutor:
         """
         name = node.action.name
         target = node.action.target
+
+        if name in ("read_file", "write_file", "list_dir") and target:
+            if not self._path_allowed(target):
+                return False, {"error": f"Path '{target}' is outside the allowed Omega workspace"}
+            # Resolve to an absolute path now that it's confirmed allowed,
+            # so every downstream branch (open/os.listdir/etc.) gets a
+            # correct path regardless of this process's actual cwd.
+            target = self._resolve_target(target)
 
         if name == "read_file":
             if not target:
