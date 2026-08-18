@@ -216,9 +216,32 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
                     continue
 
         if not resp.ok:
-            logger.warning(f"{current_model} failed ({resp.status_code}): {resp.text[:200]}")
-            last_error = f"{current_model}: {resp.text}"
-            continue
+            error_text = resp.text[:1000]
+            # Providers occasionally reject a model-specific optional field
+            # while accepting the same request without it. Retry once with
+            # only the rejected compatibility field removed/translated, then
+            # continue the normal tier fallback if that still fails.
+            retry_payload = None
+            lowered = error_text.lower()
+            if "reasoning_effort" in payload and "reasoning_effort" in lowered:
+                retry_payload = dict(payload)
+                retry_payload.pop("reasoning_effort", None)
+            elif "max_tokens" in payload and "max_tokens" in lowered and "max_completion_tokens" in lowered:
+                retry_payload = dict(payload)
+                retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+            if retry_payload is not None:
+                try:
+                    compatibility_resp = _post_once(retry_payload)
+                    if compatibility_resp.ok:
+                        resp = compatibility_resp
+                    else:
+                        error_text = compatibility_resp.text[:1000]
+                except requests.RequestException as exc:
+                    error_text = f"compatibility retry transport error: {exc}"
+            if not resp.ok:
+                logger.warning(f"{current_model} failed ({resp.status_code}): {error_text[:200]}")
+                last_error = f"{current_model}: {error_text}"
+                continue
 
         try:
             message = resp.json()["choices"][0]["message"]

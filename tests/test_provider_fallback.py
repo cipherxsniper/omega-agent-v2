@@ -57,7 +57,29 @@ def run_malformed_fallback():
     assert calls[:2] == groq_client.MODEL_TIER_STACK[:2], calls
 
 
+def run_parameter_compatibility_retry():
+    calls = []
+
+    def fake_post(payload):
+        calls.append(dict(payload))
+        if len(calls) == 1:
+            return Response(status_code=400, text="reasoning_effort is not supported for this model")
+        return Response(payload={"choices": [{"message": {"role": "assistant", "content": "compatibility-ok"}}]})
+
+    groq_client._post_once = fake_post
+    groq_client._call_timestamps.clear()
+    result = groq_client.chat_completion(
+        [{"role": "user", "content": "test"}],
+        reasoning_effort="default",
+        return_message=True,
+    )
+    assert result["content"] == "compatibility-ok"
+    assert "reasoning_effort" in calls[0]
+    assert "reasoning_effort" not in calls[1]
+
+
 if __name__ == "__main__":
     run_transport_fallback()
     run_malformed_fallback()
+    run_parameter_compatibility_retry()
     print("PROVIDER_FALLBACK_CHAOS_SMOKE_OK")
