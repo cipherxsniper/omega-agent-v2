@@ -575,7 +575,7 @@ Return 3-7 steps. Be specific to the actual task.`;
 
           {/* Input */}
           <div className="px-4 md:px-8 lg:px-12 pb-4 pt-2">
-            <ChatInput onSend={handleSend} disabled={isThinking} sandboxAvailable={isThinking || liveTranscript.length > 0} />
+            <ChatInput onSend={handleSend} disabled={isThinking} workspaceAvailable={isThinking || liveTranscript.length > 0} onOpenWorkspace={() => setShowMobileWorkspace(true)} />
             <p className="text-center text-[10px] text-white/10 mt-2 font-mono">
               Omega v1.0 — Super Agent by Thomas Lee Harvey
             </p>
@@ -595,15 +595,7 @@ Return 3-7 steps. Be specific to the actual task.`;
           />
         </div>
 
-        {/* Workspace panel — mobile: floating toggle + full-screen overlay */}
-        <button
-          onClick={() => setShowMobileWorkspace(true)}
-          className="lg:hidden fixed bottom-24 right-4 z-40 rounded-xl border border-teal-300/30 bg-[#122321] px-3 py-2 text-xs font-medium text-teal-200 shadow-lg shadow-teal-500/10 transition hover:bg-[#18332f]"
-          title="View live activity"
-        >
-          View activity
-        </button>
-
+        {/* Workspace panel — mobile: opened from the Ω button inside the composer */}
         {showMobileWorkspace && (
           <div className="lg:hidden fixed inset-0 z-50 bg-black flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">

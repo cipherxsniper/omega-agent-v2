@@ -6,6 +6,11 @@ just a thin, honest transport layer.
 import os
 import sys
 import logging
+import json
+import queue as queue_mod
+import threading
+import time
+import uuid
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -19,9 +24,17 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Restrict CORS to your actual GitHub Pages origin — replace before deploying.
-ALLOWED_ORIGIN = os.getenv("OMEGA_ALLOWED_ORIGIN", "https://YOUR-USERNAME.github.io")
-CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}})
+# Allow only the deployed Omega Pages origins. Override with a comma-separated
+# OMEGA_ALLOWED_ORIGINS value for a custom deployment; never use '*'.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "OMEGA_ALLOWED_ORIGINS",
+        "https://cipherxsniper.github.io,https://tommyleeharvey.github.io",
+    ).split(",")
+    if origin.strip()
+]
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}})
 
 LOG_PATH = os.path.expanduser("~/.omega/logs/agent_loop_signed.log")
 
