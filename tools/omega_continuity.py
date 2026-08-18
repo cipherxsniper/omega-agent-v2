@@ -18,7 +18,9 @@ DEFAULT_FILES = (
     "tools/omega_reliability_audit.py",
     "agent/shadow_council.py",
     "agent/replay_lab.py",
+    "agent/mission_autopilot.py",
     "agent/agent_loop.py",
+    "tests/test_mission_autopilot.py",
     "tests/test_reliability_audit.py",
     "tests/test_shadow_council.py",
     "tests/test_replay_lab.py",
@@ -79,10 +81,11 @@ def verify_manifest(repo: Path, manifest: dict[str, Any], run_tests: bool = True
     tests = []
     if run_tests:
         commands = [
-            ["python3", "-m", "py_compile", "tools/omega_reliability_audit.py", "agent/shadow_council.py", "agent/replay_lab.py", "agent/agent_loop.py"],
+            ["python3", "-m", "py_compile", "tools/omega_reliability_audit.py", "agent/shadow_council.py", "agent/replay_lab.py", "agent/mission_autopilot.py", "agent/agent_loop.py"],
             ["python3", "tests/test_reliability_audit.py"],
             ["python3", "tests/test_shadow_council.py"],
             ["python3", "tests/test_replay_lab.py"],
+            ["python3", "tests/test_mission_autopilot.py"],
         ]
         for command in commands:
             env = dict(os.environ, PYTHONPATH=".")

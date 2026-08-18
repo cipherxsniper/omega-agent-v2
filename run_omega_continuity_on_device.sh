@@ -31,15 +31,16 @@ REMOTE_HEAD="$(git rev-parse "$REMOTE_NAME/main")"
 git checkout -B main "$REMOTE_HEAD"
 git reset --hard "$REMOTE_HEAD"
 
-for file in tools/omega_continuity.py tools/omega_reliability_audit.py agent/shadow_council.py agent/replay_lab.py agent/agent_loop.py tests/test_continuity.py tests/test_reliability_audit.py tests/test_shadow_council.py tests/test_replay_lab.py; do
+for file in tools/omega_continuity.py tools/omega_reliability_audit.py agent/shadow_council.py agent/replay_lab.py agent/mission_autopilot.py agent/agent_loop.py tests/test_continuity.py tests/test_reliability_audit.py tests/test_shadow_council.py tests/test_replay_lab.py tests/test_mission_autopilot.py; do
   [ -f "$file" ] || { echo "Required file missing: $file" >&2; exit 1; }
 done
 
-PYTHONPATH=. python3 -m py_compile tools/omega_continuity.py tools/omega_reliability_audit.py agent/shadow_council.py agent/replay_lab.py agent/agent_loop.py
+PYTHONPATH=. python3 -m py_compile tools/omega_continuity.py tools/omega_reliability_audit.py agent/shadow_council.py agent/replay_lab.py agent/mission_autopilot.py agent/agent_loop.py
 PYTHONPATH=. python3 tests/test_continuity.py
 PYTHONPATH=. python3 tests/test_reliability_audit.py
 PYTHONPATH=. python3 tests/test_shadow_council.py
 PYTHONPATH=. python3 tests/test_replay_lab.py
+PYTHONPATH=. python3 tests/test_mission_autopilot.py
 
 PYTHONPATH=. python3 tools/omega_continuity.py --generate --manifest omega_continuity_manifest.json --receipt omega_continuity_receipt.json
 STATUS="$(python3 -c 'import json; print(json.load(open("omega_continuity_receipt.json"))["status"])')"
