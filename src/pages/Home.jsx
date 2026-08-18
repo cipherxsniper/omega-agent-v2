@@ -62,6 +62,8 @@ export default function Home() {
   const [continuityContext, setContinuityContext] = useState(null);
   const [mission, setMission] = useState(null);
   const [missionHistory, setMissionHistory] = useState([]);
+  const [recovery, setRecovery] = useState(null);
+  const [replayRequest, setReplayRequest] = useState(null);
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -70,6 +72,19 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
+
+  useEffect(() => {
+    if (!isThinking) return undefined;
+    const timer = window.setTimeout(() => {
+      setRecovery((current) => current || {
+        status: "degraded",
+        reason: "No terminal mission evidence observed within the bounded wait window.",
+        attempts: 0,
+        maxAttempts: 2,
+      });
+    }, 30000);
+    return () => window.clearTimeout(timer);
+  }, [isThinking]);
 
   useEffect(() => {
     const checkpoint = readContinuityCheckpoint(activeConversationId);
@@ -222,6 +237,7 @@ Return 3-7 steps. Be specific to the actual task.`;
         };
       }),
     ).then((items) => items.filter(Boolean));
+    setReplayRequest({ text, mode, attachments: [] });
     const attachmentContext = normalizedAttachments.length
       ? `\n\nATTACHED FILES:\n${normalizedAttachments.map((item) =>
           `- ${item.name} (${item.type}, ${item.size} bytes)${item.isImage ? "\\n[PHOTO ATTACHED: sent to the configured vision-capable model for analysis.]" : ""}${item.extractedText ? `\\n${item.extractedText}` : ""}`
@@ -265,6 +281,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     setMessages((prev) => [...prev, userMsg]);
     setIsThinking(true);
     setLiveTranscript([]);
+    setRecovery({ status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: 0, attempts: 0, maxAttempts: 2, reason: "Mission checkpoint created; awaiting live evidence." });
     persistContinuity(convId, {
       status: "running",
       lastUserText: text,
@@ -275,6 +292,16 @@ Return 3-7 steps. Be specific to the actual task.`;
     });
 
     const startTime = Date.now();
+    const recordLiveStep = (step) => {
+      setLiveTranscript((prev) => [...prev, step]);
+      setRecovery((current) => ({ ...(current || {}), status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: (current?.eventCount || 0) + 1, lastStep: step.title || step.name || step.role || "Working", reason: "Checkpoint advanced from an observed SSE event." }));
+      persistContinuity(convId, {
+        status: "running",
+        lastUserText: text,
+        mode,
+        lastStep: step.title || step.name || step.role || "Working",
+      });
+    };
 
     // Step 1: Generate plan
     const planSteps = await generatePlan(requestText, mode, convId);
@@ -396,15 +423,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             },
           },
         },
-        onStep: (step) => {
-          setLiveTranscript((prev) => [...prev, step]);
-          persistContinuity(convId, {
-            status: "running",
-            lastUserText: text,
-            mode,
-            lastStep: step.title || step.name || step.role || "Working",
-          });
-        },
+        onStep: recordLiveStep,
       });
       response = response.data || response;
     } else {
@@ -418,19 +437,14 @@ Return 3-7 steps. Be specific to the actual task.`;
             response: { type: "string" },
           },
         },
-        onStep: (step) => {
-          setLiveTranscript((prev) => [...prev, step]);
-          persistContinuity(convId, {
-            status: "running",
-            lastUserText: text,
-            mode,
-            lastStep: step.title || step.name || step.role || "Working",
-          });
-        },
+        onStep: recordLiveStep,
       });
       response = response.data || response;
     }
 
+    if (response?.error) {
+      setRecovery((current) => ({ ...(current || {}), status: "degraded", reason: response.error, attempts: current?.attempts || 0, maxAttempts: 2 }));
+    }
     const responseTime = Date.now() - startTime;
 
     // Parse response
@@ -525,6 +539,7 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
+    setRecovery((current) => ({ ...(current || {}), status: response?.error ? "degraded" : verificationResult && !(verificationResult.data || verificationResult).passed ? "degraded" : "recovered", missionId: newMission.id, proofId: newMission.proofId, reason: response?.error || "Terminal response and proof metadata recorded." }));
     clearContinuityCheckpoint(convId);
     const completedAt = new Date().toISOString();
     setMission((current) => current ? { ...current, completedAt, status: "verified", transcript: response.transcript || [] } : current);
@@ -541,6 +556,12 @@ Return 3-7 steps. Be specific to the actual task.`;
         prev.map((c) => (c.id === convId ? { ...c, title } : c))
       );
     }
+  };
+
+  const replayLastMission = async () => {
+    if (!replayRequest || isThinking || (recovery?.attempts || 0) >= (recovery?.maxAttempts || 2)) return;
+    setRecovery((current) => ({ ...(current || {}), status: "replaying", attempts: (current?.attempts || 0) + 1, reason: "Replaying from the last verified checkpoint with a bounded retry." }));
+    await handleSend(replayRequest.text, replayRequest.mode, replayRequest.attachments || []);
   };
 
   const handleIntroComplete = useCallback(() => setShowIntro(false), []);
@@ -652,6 +673,8 @@ Return 3-7 steps. Be specific to the actual task.`;
             isThinking={isThinking}
             mission={mission}
             missions={missionHistory}
+            recovery={recovery}
+            onReplay={replayLastMission}
             transcript={
               isThinking && liveTranscript.length > 0
                 ? liveTranscript
