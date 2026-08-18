@@ -27,6 +27,7 @@ from agent.core.action_engine import Action, ActionNode, ActionExecutor, ActionV
 from agent.self_extend import propose_tool
 from lib.omega_proof import sign_event
 from agent.decision_provenance import build_decision_provenance
+from agent.shadow_council import ActionProposal, ShadowCouncil
 
 logger = logging.getLogger("OmegaAgentLoop")
 RUNTIME_LOG_DIR = os.path.expanduser("~/.omega/logs")
@@ -278,7 +279,7 @@ SYSTEM_PROMPT = (
 )
 
 
-async def _execute_tool_call(executor, tool_call):
+async def _execute_tool_call(executor, tool_call, council=None, signed_log=None):
     """Take one model tool_call, run it for real, return the real result dict."""
     name = tool_call["function"]["name"]
     try:
@@ -287,6 +288,20 @@ async def _execute_tool_call(executor, tool_call):
         return {"error": f"Model sent malformed tool arguments: {e}"}
 
     if name == "propose_new_tool":
+        if council is not None:
+            proposal = ActionProposal(
+                action=name,
+                parameters={"handler_name": args.get("handler_name", "unnamed_tool"), "description": args.get("description", "")},
+                capability=name,
+                mutation=True,
+                rollback=args.get("rollback"),
+                acceptance_tests=("isolated proposal test passes", "full regression suite passes"),
+            )
+            decision = council.review(proposal)
+            receipt = decision.receipt()
+            _safe_sign_event(signed_log, event_type="shadow_council", data=receipt)
+            if not decision.approved:
+                return {"success": False, "error": "Shadow Council vetoed action", "shadow_council": receipt}
         # Not a normal dispatch action — runs the full test-gated self-extension
         # pipeline instead, synchronously (it's already fast: compile + pytest).
         result = propose_tool(
@@ -299,6 +314,30 @@ async def _execute_tool_call(executor, tool_call):
 
     action = Action(name=name, target=args.get("path"))
     node = ActionNode(action=action, parameters=args)
+
+    if council is not None:
+        mutation_actions = {"write_file", "edit_file", "git_commit", "propose_new_tool"}
+        acceptance_tests = args.get("acceptance_tests", ())
+        if isinstance(acceptance_tests, str):
+            acceptance_tests = (acceptance_tests,)
+        elif not isinstance(acceptance_tests, (list, tuple)):
+            acceptance_tests = ()
+        proposal = ActionProposal(
+            action=name,
+            parameters={key: value for key, value in args.items() if key not in {"content", "handler_code", "test_code"}},
+            target=args.get("path"),
+            capability=name,
+            mutation=name in mutation_actions,
+            rollback=args.get("rollback"),
+            acceptance_tests=tuple(acceptance_tests),
+            expected_diff_hash=args.get("expected_diff_hash"),
+        )
+        decision = council.review(proposal)
+        receipt = decision.receipt()
+        _safe_sign_event(signed_log, event_type="shadow_council", data=receipt)
+        if not decision.approved:
+            return {"success": False, "error": "Shadow Council vetoed action", "shadow_council": receipt}
+
     result = await executor._execute_with_retry(node, {})
 
     return {
@@ -347,6 +386,10 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
     validator = ActionValidator()
     analyzer = SideEffectAnalyzer()
     executor = ActionExecutor(validator, analyzer)
+    council = ShadowCouncil(
+        allowed_roots=executor._compute_allowed_roots(),
+        capabilities=[item["function"]["name"] for item in TOOLS],
+    )
 
     system = SYSTEM_PROMPT
     if cwd_hint:
@@ -530,7 +573,7 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                     pass
 
             for tc_index, tc in enumerate(tool_calls):
-                result = loop.run_until_complete(_execute_tool_call(executor, tc))
+                result = loop.run_until_complete(_execute_tool_call(executor, tc, council=council, signed_log=signed_log))
 
                 _safe_sign_event(signed_log, event_type="tool_call", data={
                     "step": step,
