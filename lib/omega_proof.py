@@ -12,16 +12,33 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from cryptography.exceptions import InvalidSignature
 
 
+def _decode_base64_key(value: str, source: str) -> bytes:
+    try:
+        raw = base64.b64decode(value.strip(), validate=True)
+    except Exception as exc:
+        raise RuntimeError(f"{source} is not valid base64 key material") from exc
+    if len(raw) < 32:
+        raise RuntimeError(f"{source} must decode to at least 32 bytes")
+    return raw[:32]
+
+
 def _load_signer():
     b64key = os.environ.get("PROOFCHAIN_SIGNING_KEY")
     if b64key:
-        raw = base64.b64decode(b64key)[:32]
+        raw = _decode_base64_key(b64key, "PROOFCHAIN_SIGNING_KEY")
     else:
         keyfile = os.environ.get("PROOFCHAIN_KEYFILE")
         if not keyfile:
             raise RuntimeError("Neither PROOFCHAIN_SIGNING_KEY nor PROOFCHAIN_KEYFILE set — no placeholder key will be used.")
-        data = json.loads(Path(keyfile).expanduser().read_text())
-        raw = bytes(data["secret"][:32]) if isinstance(data, dict) else bytes(data[:32])
+        key_path = Path(keyfile).expanduser()
+        if key_path.is_file():
+            data = json.loads(key_path.read_text())
+            raw = bytes(data["secret"][:32]) if isinstance(data, dict) else bytes(data[:32])
+        else:
+            # Render deployments sometimes expose the base64 key through the
+            # KEYFILE variable. Accept that explicit key material without
+            # attempting to open it as a filesystem path.
+            raw = _decode_base64_key(keyfile, "PROOFCHAIN_KEYFILE")
     priv = Ed25519PrivateKey.from_private_bytes(raw)
     return priv, priv.public_key()
 
