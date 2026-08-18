@@ -647,6 +647,7 @@ Return 3-7 steps. Be specific to the actual task.`;
               <WorkspacePanel
                 conversationId={activeConversationId}
                 isThinking={isThinking}
+                mission={mission}
                 transcript={
                   isThinking && liveTranscript.length > 0
                     ? liveTranscript
