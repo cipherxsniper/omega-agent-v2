@@ -5,6 +5,10 @@ import time
 import py_compile
 import os
 import sys
+import hashlib
+import tempfile
+import fcntl
+from contextlib import contextmanager
 sys.path.append(os.path.expanduser('~/.omega/lib'))
 from lib.omega_proof import sign_event
 from typing import Dict, Any, List, Optional, Set
@@ -224,6 +228,38 @@ class ActionExecutor:
                 return True
         return False
 
+    @contextmanager
+    def _file_lock(self, target: str, exclusive: bool = False):
+        """Cross-process lock for approved workspace files; lock metadata stays outside repos."""
+        real = os.path.realpath(os.path.abspath(target))
+        lock_dir = os.path.expanduser("~/.omega/locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_name = hashlib.sha256(real.encode("utf-8")).hexdigest() + ".lock"
+        lock_path = os.path.join(lock_dir, lock_name)
+        with open(lock_path, "a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _atomic_write(self, target: str, content: str):
+        directory = os.path.dirname(target) or "."
+        os.makedirs(directory, exist_ok=True)
+        mode = os.stat(target).st_mode if os.path.exists(target) else None
+        fd, temporary = tempfile.mkstemp(prefix=".omega-write-", dir=directory, text=True)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if mode is not None:
+                os.chmod(temporary, mode)
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     async def _dispatch_action(self, node: ActionNode) -> tuple:
         """
         Real per-action execution. No fake success — each branch does
@@ -245,8 +281,9 @@ class ActionExecutor:
                 return False, {"error": "read_file called with no target path set"}
             if not os.path.exists(target):
                 return False, {"error": f"File not found: {target}"}
-            with open(target, "r", errors="replace") as f:
-                content = f.read()
+            with self._file_lock(target, exclusive=False):
+                with open(target, "r", errors="replace") as f:
+                    content = f.read()
             return True, {"status_code": "OK", "bytes_read": len(content), "path": target}
 
         elif name == "compile_code":
@@ -267,10 +304,9 @@ class ActionExecutor:
             if file_content is None:
                 return False, {"error": "write_file called with no 'content' parameter"}
             try:
-                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-                with open(target, "w") as f:
-                    f.write(file_content)
-                return True, {"status_code": "OK", "bytes_written": len(file_content), "path": target}
+                with self._file_lock(target, exclusive=True):
+                    self._atomic_write(target, file_content)
+                return True, {"status_code": "OK", "bytes_written": len(file_content), "path": target, "atomic": True, "locked": True}
             except Exception as e:
                 return False, {"error": f"Write failed: {e}"}
 
@@ -321,17 +357,17 @@ class ActionExecutor:
                 return False, {"error": "edit_file requires 'old_str'"}
             if not os.path.exists(target):
                 return False, {"error": f"File not found: {target}"}
-            with open(target, "r") as f:
-                content_ = f.read()
-            count = content_.count(old_str)
-            if count == 0:
-                return False, {"error": "old_str not found in file"}
-            if count > 1:
-                return False, {"error": f"old_str matches {count} times, must be unique"}
-            content_ = content_.replace(old_str, new_str)
-            with open(target, "w") as f:
-                f.write(content_)
-            return True, {"status_code": "OK", "path": target, "replaced": True}
+            with self._file_lock(target, exclusive=True):
+                with open(target, "r") as f:
+                    content_ = f.read()
+                count = content_.count(old_str)
+                if count == 0:
+                    return False, {"error": "old_str not found in file"}
+                if count > 1:
+                    return False, {"error": f"old_str matches {count} times, must be unique"}
+                content_ = content_.replace(old_str, new_str)
+                self._atomic_write(target, content_)
+            return True, {"status_code": "OK", "path": target, "replaced": True, "atomic": True, "locked": True}
 
         elif name == "git_status":
             try:
