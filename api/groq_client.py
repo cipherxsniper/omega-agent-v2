@@ -105,9 +105,20 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
     """
     import re
 
-    tier = MODEL_TIER_STACK if model is None else [model] + [
-        m for m in MODEL_TIER_STACK if m != model
-    ]
+    has_images = any(
+        isinstance(message.get("content"), list)
+        and any(part.get("type") == "image_url" for part in message["content"] if isinstance(part, dict))
+        for message in messages
+        if isinstance(message, dict)
+    )
+    if has_images and model is None:
+        # Only qwen/qwen3.6-27b is vision-capable in this configured stack.
+        # Do not silently retry with text-only models and imply that an image was analyzed.
+        tier = ["qwen/qwen3.6-27b"]
+    else:
+        tier = MODEL_TIER_STACK if model is None else [model] + [
+            m for m in MODEL_TIER_STACK if m != model
+        ]
 
     last_error = None
     for idx in range(_tier_start_index, len(tier)):

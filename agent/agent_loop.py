@@ -304,7 +304,7 @@ def save_session(messages):
         json.dump({"messages": messages, "saved_at": time.time()}, f, indent=2, default=str)
 
 
-def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False, on_step=None, require_plan=False):
+def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False, on_step=None, require_plan=False, image_inputs=None):
     """
     Runs the real tool-use loop synchronously (wraps async internals).
     Returns the full transcript: list of {step, role, content/tool_calls/tool_result}.
@@ -318,13 +318,24 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
         system += f" The current working directory is {cwd_hint}."
 
     prior = load_session() if resume else None
+    image_inputs = image_inputs or []
+    if image_inputs:
+        content_parts = [{"type": "text", "text": task_description}]
+        content_parts.extend(
+            {"type": "image_url", "image_url": {"url": item["dataUrl"]}}
+            for item in image_inputs
+        )
+        user_content = content_parts
+    else:
+        user_content = task_description
+
     if prior and prior.get("messages"):
         messages = prior["messages"]
-        messages.append({"role": "user", "content": task_description})
+        messages.append({"role": "user", "content": user_content})
     else:
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": task_description},
+            {"role": "user", "content": user_content},
         ]
 
     transcript = []

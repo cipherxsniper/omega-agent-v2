@@ -197,20 +197,34 @@ Return 3-7 steps. Be specific to the actual task.`;
           extractedText = (await file.text()).slice(0, 12000);
         }
         const isImage = file.type.startsWith("image/");
+        let dataUrl = null;
+        if (isImage) {
+          dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+            reader.readAsDataURL(file);
+          });
+        }
         return {
           name: file.name,
           type: file.type || "application/octet-stream",
           size: file.size,
           isImage,
+          dataUrl,
           extractedText,
         };
       }),
     ).then((items) => items.filter(Boolean));
     const attachmentContext = normalizedAttachments.length
       ? `\n\nATTACHED FILES:\n${normalizedAttachments.map((item) =>
-          `- ${item.name} (${item.type}, ${item.size} bytes)${item.isImage ? "\\n[PHOTO ATTACHED: visual bytes are preserved in the composer; this backend must advertise vision support before claiming image analysis.]" : ""}${item.extractedText ? `\\n${item.extractedText}` : ""}`
+          `- ${item.name} (${item.type}, ${item.size} bytes)${item.isImage ? "\\n[PHOTO ATTACHED: sent to the configured vision-capable model for analysis.]" : ""}${item.extractedText ? `\\n${item.extractedText}` : ""}`
         ).join("\n")}`
       : "";
+    const imageInputs = normalizedAttachments
+      .filter((item) => item.isImage && typeof item.dataUrl === "string")
+      .slice(0, 5)
+      .map(({ name, type, dataUrl }) => ({ name, type, dataUrl }));
     const continuityNote = continuityContext
       ? `\n\nRESUMING AN INTERRUPTED OMEGA SESSION:\nLast task: ${continuityContext.lastUserText || "Unknown"}\nLast observed step: ${continuityContext.lastStep || "No step recorded"}\nContinue from this context without repeating completed work.`
       : "";
@@ -355,6 +369,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     if (mode === "research") {
       response = await base44.functions.invoke("groqComplete", {
         prompt: userPrompt,
+        images: imageInputs,
         add_context_from_internet: true,
         response_json_schema: {
           type: "object",
@@ -388,6 +403,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     } else {
       response = await base44.functions.invoke("groqComplete", {
         prompt: userPrompt,
+        images: imageInputs,
         response_json_schema: {
           type: "object",
           properties: {
@@ -600,7 +616,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             ) : (
               <>
                 {messages.map((msg) => (
-                  <MessageBubble key={msg.id} message={msg} />
+                  <MessageBubble key={msg.id} message={msg} onOpenWorkspace={() => setShowMobileWorkspace(true)} />
                 ))}
                 {isThinking && <TypingIndicator />}
                 <div ref={messagesEndRef} />

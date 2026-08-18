@@ -46,9 +46,33 @@ CWD_HINT = os.path.expanduser("~/omega_workspace") + (
 )
 _jobs = {}
 _jobs_lock = threading.Lock()
+MAX_IMAGES = 5
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
-def _run_job(job_id, message, max_steps):
+def _validate_images(raw_images):
+    if raw_images in (None, []):
+        return []
+    if not isinstance(raw_images, list) or len(raw_images) > MAX_IMAGES:
+        raise ValueError(f"At most {MAX_IMAGES} images may be attached")
+    validated = []
+    for item in raw_images:
+        if not isinstance(item, dict):
+            raise ValueError("Each image attachment must be an object")
+        data_url = item.get("dataUrl")
+        if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
+            raise ValueError("Image attachments must use data:image/* URLs")
+        if len(data_url.encode("utf-8")) > MAX_IMAGE_BYTES:
+            raise ValueError("An image attachment exceeds the 20 MB provider limit")
+        validated.append({
+            "name": str(item.get("name", "image"))[:200],
+            "type": str(item.get("type", "image/*"))[:100],
+            "dataUrl": data_url,
+        })
+    return validated
+
+
+def _run_job(job_id, message, max_steps, images):
     with _jobs_lock:
         job = _jobs[job_id]
         job["status"] = "running"
@@ -66,6 +90,7 @@ def _run_job(job_id, message, max_steps):
             signed_log=LOG_PATH,
             cwd_hint=CWD_HINT,
             on_step=on_step,
+            image_inputs=images,
         )
         final_entry = next((entry for entry in reversed(transcript) if entry.get("final")), None)
         final_text = final_entry.get("content", "") if final_entry else "Omega finished without a final entry; review the observable transcript."
@@ -99,6 +124,10 @@ def chat():
     body = request.get_json(silent=True) or {}
     message = body.get("message", "").strip()
     max_steps = int(body.get("max_steps", 10))
+    try:
+        images = _validate_images(body.get("images", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     if not message:
         return jsonify({"error": "Missing 'message' in request body"}), 400
@@ -115,6 +144,7 @@ def chat():
                 "omega-agent-v2, Omega_Finacial_Network. Use paths like "
                 "'OMEGAOPS.AI/omega_v10.py' relative to this root."
             ),
+            image_inputs=images,
         )
     except Exception as e:
         logger.error(f"Agent task failed: {e}", exc_info=True)
@@ -138,6 +168,10 @@ def job_start():
     body = request.get_json(silent=True) or {}
     message = body.get("message", "").strip()
     max_steps = int(body.get("max_steps", 100))
+    try:
+        images = _validate_images(body.get("images", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     if not message:
         return jsonify({"error": "Missing 'message' in request body"}), 400
@@ -150,9 +184,10 @@ def job_start():
             "max_steps": max_steps,
             "started_at": time.time(),
             "step_queue": queue_mod.Queue(),
+            "images": images,
         }
 
-    thread = threading.Thread(target=_run_job, args=(job_id, message, max_steps), daemon=True)
+    thread = threading.Thread(target=_run_job, args=(job_id, message, max_steps, images), daemon=True)
     thread.start()
 
     return jsonify({"job_id": job_id, "status": "queued"})
