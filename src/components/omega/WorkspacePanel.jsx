@@ -6,6 +6,7 @@ import {
   Globe, Terminal, FileCode, ListChecks, Loader2, CheckCircle,
   XCircle, Clock, Search, Brain, Code, Monitor,
 } from "lucide-react";
+import MissionControl from "@/components/omega/MissionControl";
 
 const TABS = [
   { id: "actions", label: "Actions", icon: ListChecks },
@@ -24,7 +25,7 @@ const TOOL_ICONS = {
   none: Code,
 };
 
-export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript }) {
+export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission }) {
   const [activeTab, setActiveTab] = useState("actions");
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -102,6 +103,8 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
           </div>
         </div>
       )}
+
+      <MissionControl mission={mission} steps={steps} isThinking={isThinking} />
 
       {/* Tabs */}
       <div className="flex border-b border-white/5 shrink-0">

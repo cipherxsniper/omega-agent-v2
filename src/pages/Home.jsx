@@ -18,6 +18,30 @@ import SettingsPanel from "@/components/omega/SettingsPanel";
 import AgentTemplatesPanel from "@/components/omega/AgentTemplatesPanel";
 import { X } from "lucide-react";
 
+const missionDigest = async (payload) => {
+  const encoded = new TextEncoder().encode(JSON.stringify(payload));
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
+const buildMission = async (text, mode, attachments) => {
+  const payload = { text, mode, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) };
+  const proofId = await missionDigest(payload);
+  return {
+    id: `mission_${proofId.slice(0, 16)}`,
+    proofId,
+    objective: text.length > 72 ? `${text.slice(0, 69)}...` : text,
+    criteria: [
+      { label: "A real assistant response is received" },
+      { label: "The live activity transcript completes without an unverified claim" },
+      { label: "Evidence and proof metadata remain linked to this request" },
+    ],
+    evidence: ["assistant response", "live step transcript", "proof-linked decision record"],
+    boundary: "observable actions only · no hidden reasoning",
+    createdAt: new Date().toISOString(),
+  };
+};
+
 export default function Home() {
   const [showIntro, setShowIntro] = useState(true);
   const [conversations, setConversations] = useState([]);
@@ -31,6 +55,7 @@ export default function Home() {
   const [liveTranscript, setLiveTranscript] = useState([]);
   const [resumeCheckpoint, setResumeCheckpoint] = useState(null);
   const [continuityContext, setContinuityContext] = useState(null);
+  const [mission, setMission] = useState(null);
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -202,6 +227,9 @@ Return 3-7 steps. Be specific to the actual task.`;
       convId = conv.id;
     }
 
+    const newMission = await buildMission(text, mode, normalizedAttachments);
+    setMission(newMission);
+
     // Save user message
     const userMsg = await base44.entities.Message.create({
       conversation_id: convId,
@@ -210,6 +238,7 @@ Return 3-7 steps. Be specific to the actual task.`;
       metadata: {
         mode,
         attachments: normalizedAttachments.map(({ name, type, size }) => ({ name, type, size })),
+        mission: newMission,
       },
     });
     setMessages((prev) => [...prev, userMsg]);
@@ -219,8 +248,9 @@ Return 3-7 steps. Be specific to the actual task.`;
       status: "running",
       lastUserText: text,
       mode,
-      attachments: normalizedAttachments.map(({ name, type, size }) => ({ name, type, size })),
-      lastStep: "Preparing Omega plan",
+        attachments: normalizedAttachments.map(({ name, type, size }) => ({ name, type, size })),
+        mission: newMission,
+        lastStep: "Preparing Omega mission contract",
     });
 
     const startTime = Date.now();
@@ -317,6 +347,9 @@ Return 3-7 steps. Be specific to the actual task.`;
     } else {
       userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nUser: ${requestText}`;
     }
+
+    const missionContract = `\n\nMISSION CONTROL CONTRACT:\nObjective: ${newMission.objective}\nAcceptance criteria:\n${newMission.criteria.map((criterion) => `- ${criterion.label}`).join("\n")}\nEvidence required:\n${newMission.evidence.map((item) => `- ${item}`).join("\n")}\nBoundary: ${newMission.boundary}\nMission proof ID: ${newMission.proofId}\nSatisfy this contract with observable evidence. Do not claim completion without evidence.`;
+    userPrompt = `${userPrompt}${missionContract}`;
 
     let response;
     if (mode === "research") {
@@ -434,8 +467,9 @@ Return 3-7 steps. Be specific to the actual task.`;
       sources,
       transcript: response.transcript || null,
       job_id: job?.id,
-      metadata: {
-        model: "omega-1.0",
+        metadata: {
+          model: "omega-1.0",
+          mission: newMission,
         response_time_ms: responseTime,
         mode,
         verified: verificationResult ? (verificationResult.data || verificationResult).passed : null,
@@ -469,6 +503,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
     clearContinuityCheckpoint(convId);
+    setMission((current) => current ? { ...current, completedAt: new Date().toISOString() } : current);
 
     // Update conversation title if first message
     if (messages.length === 0) {
@@ -587,6 +622,7 @@ Return 3-7 steps. Be specific to the actual task.`;
           <WorkspacePanel
             conversationId={activeConversationId}
             isThinking={isThinking}
+            mission={mission}
             transcript={
               isThinking && liveTranscript.length > 0
                 ? liveTranscript
