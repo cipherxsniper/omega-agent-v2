@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
 import { clearContinuityCheckpoint, readContinuityCheckpoint, writeContinuityCheckpoint } from "@/lib/continuity";
 import { appendMissionEvent, hydrateMissionLedger } from "@/lib/missionLedger";
+import { beginRecovery, detectDependency, evaluateSelfHealing } from "@/lib/selfHealing";
 import { AnimatePresence } from "framer-motion";
 import { buildPromptWithMemory, buildConversationMessages, extractMemoryCandidate, BASE_SYSTEM_PROMPT } from "@/lib/omega-system";
 import OmegaIntro from "@/components/omega/OmegaIntro";
@@ -66,6 +67,8 @@ export default function Home() {
   const [recovery, setRecovery] = useState(null);
   const [replayRequest, setReplayRequest] = useState(null);
   const [ledger, setLedger] = useState({ status: "empty", missions: [], events: [] });
+  const [selfHealing, setSelfHealing] = useState({ state: "healthy", reason: "No degraded dependency observed." });
+  const selfHealingReceiptRef = useRef("");
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -82,6 +85,27 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
+
+  useEffect(() => {
+    const signal = detectDependency({ isThinking, eventCount: recovery?.eventCount || 0, recovery: { ...(recovery || {}), ledgerStatus: ledger.status } , ledgerStatus: ledger.status });
+    const decision = evaluateSelfHealing({ signal, recovery: { ...(recovery || {}), ledgerStatus: ledger.status }, councilApproved: false });
+    const receiptKey = signal ? `${signal.id}:${decision.state}:${recovery?.attempts || 0}` : "healthy";
+    if (receiptKey !== selfHealingReceiptRef.current) {
+      selfHealingReceiptRef.current = receiptKey;
+      if (signal) appendMissionEvent({ missionId: recovery?.missionId || mission?.id || "system", proofId: recovery?.proofId || mission?.proofId || "", type: `self_healing_${decision.state}`, status: decision.state, reason: decision.reason, step: decision.playbook?.id || signal.id }).then(() => hydrateMissionLedger().then(setLedger));
+    }
+    setSelfHealing(decision);
+    if (decision.state === "recovering" && decision.playbook?.id === "refresh_ledger") {
+      hydrateMissionLedger().then((result) => {
+        setLedger(result);
+        setSelfHealing({ ...decision, state: "recovered", reason: "Mission Ledger refreshed and integrity verified." });
+      });
+    }
+    if (decision.state === "recovering" && decision.playbook?.id === "reconnect_sse") {
+      setRecovery((current) => beginRecovery(decision, current || {}));
+      window.dispatchEvent(new CustomEvent("omega:self-heal", { detail: { playbook: decision.playbook.id } }));
+    }
+  }, [isThinking, recovery?.status, recovery?.eventCount, recovery?.startedAt, ledger.status]);
 
   useEffect(() => {
     if (!isThinking) return undefined;
@@ -292,7 +316,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     setMessages((prev) => [...prev, userMsg]);
     setIsThinking(true);
     setLiveTranscript([]);
-    setRecovery({ status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: 0, attempts: 0, maxAttempts: 2, reason: "Mission checkpoint created; awaiting live evidence." });
+    setRecovery({ status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: 0, attempts: 0, maxAttempts: 2, startedAt: Date.now(), reason: "Mission checkpoint created; awaiting live evidence." });
     persistContinuity(convId, {
       status: "running",
       lastUserText: text,
@@ -690,6 +714,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             missions={missionHistory.length ? missionHistory : ledger.missions}
             recovery={recovery}
             ledger={ledger}
+            selfHealing={selfHealing}
             onReplay={replayLastMission}
             transcript={
               isThinking && liveTranscript.length > 0
@@ -716,7 +741,10 @@ Return 3-7 steps. Be specific to the actual task.`;
                 conversationId={activeConversationId}
                 isThinking={isThinking}
                 mission={mission}
-                missions={missionHistory}
+                missions={missionHistory.length ? missionHistory : ledger.missions}
+                ledger={ledger}
+                selfHealing={selfHealing}
+                onReplay={replayLastMission}
                 transcript={
                   isThinking && liveTranscript.length > 0
                     ? liveTranscript
