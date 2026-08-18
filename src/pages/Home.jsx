@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
 import { clearContinuityCheckpoint, readContinuityCheckpoint, writeContinuityCheckpoint } from "@/lib/continuity";
+import { appendMissionEvent, hydrateMissionLedger } from "@/lib/missionLedger";
 import { AnimatePresence } from "framer-motion";
 import { buildPromptWithMemory, buildConversationMessages, extractMemoryCandidate, BASE_SYSTEM_PROMPT } from "@/lib/omega-system";
 import OmegaIntro from "@/components/omega/OmegaIntro";
@@ -64,9 +65,18 @@ export default function Home() {
   const [missionHistory, setMissionHistory] = useState([]);
   const [recovery, setRecovery] = useState(null);
   const [replayRequest, setReplayRequest] = useState(null);
+  const [ledger, setLedger] = useState({ status: "empty", missions: [], events: [] });
 
   useEffect(() => {
     if (!showIntro) loadConversations();
+  }, [showIntro]);
+
+  useEffect(() => {
+    if (showIntro) return;
+    hydrateMissionLedger().then((result) => {
+      setLedger(result);
+      if (result.status === "verified" && result.missions?.length) setMissionHistory(result.missions);
+    });
   }, [showIntro]);
 
   useEffect(() => {
@@ -266,6 +276,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     const newMission = await buildMission(text, mode, normalizedAttachments);
     setMission(newMission);
     setMissionHistory((previous) => [...previous.filter((item) => item.id !== newMission.id), { ...newMission, status: "active", transcript: [] }].slice(-6));
+    appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: "mission_started", status: "active" }).then(() => hydrateMissionLedger().then(setLedger));
 
     // Save user message
     const userMsg = await base44.entities.Message.create({
@@ -294,7 +305,9 @@ Return 3-7 steps. Be specific to the actual task.`;
     const startTime = Date.now();
     const recordLiveStep = (step) => {
       setLiveTranscript((prev) => [...prev, step]);
-      setRecovery((current) => ({ ...(current || {}), status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: (current?.eventCount || 0) + 1, lastStep: step.title || step.name || step.role || "Working", reason: "Checkpoint advanced from an observed SSE event." }));
+      const eventCount = (recovery?.eventCount || 0) + 1;
+      setRecovery((current) => ({ ...(current || {}), status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount, lastStep: step.title || step.name || step.role || "Working", reason: "Checkpoint advanced from an observed SSE event." }));
+      appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: "sse_step", status: "checkpointed", step: step.title || step.name || step.role || "Working", eventCount, evidenceHash: step.decision_provenance?.context_hash || "" }).then(() => hydrateMissionLedger().then(setLedger));
       persistContinuity(convId, {
         status: "running",
         lastUserText: text,
@@ -539,7 +552,9 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
-    setRecovery((current) => ({ ...(current || {}), status: response?.error ? "degraded" : verificationResult && !(verificationResult.data || verificationResult).passed ? "degraded" : "recovered", missionId: newMission.id, proofId: newMission.proofId, reason: response?.error || "Terminal response and proof metadata recorded." }));
+    const recoveryStatus = response?.error ? "degraded" : verificationResult && !(verificationResult.data || verificationResult).passed ? "degraded" : "recovered";
+    setRecovery((current) => ({ ...(current || {}), status: recoveryStatus, missionId: newMission.id, proofId: newMission.proofId, reason: response?.error || "Terminal response and proof metadata recorded." }));
+    appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: recoveryStatus === "recovered" ? "recovered" : "degraded", status: recoveryStatus, reason: response?.error || "Terminal response and proof metadata recorded." }).then(() => hydrateMissionLedger().then(setLedger));
     clearContinuityCheckpoint(convId);
     const completedAt = new Date().toISOString();
     setMission((current) => current ? { ...current, completedAt, status: "verified", transcript: response.transcript || [] } : current);
@@ -672,8 +687,9 @@ Return 3-7 steps. Be specific to the actual task.`;
             conversationId={activeConversationId}
             isThinking={isThinking}
             mission={mission}
-            missions={missionHistory}
+            missions={missionHistory.length ? missionHistory : ledger.missions}
             recovery={recovery}
+            ledger={ledger}
             onReplay={replayLastMission}
             transcript={
               isThinking && liveTranscript.length > 0

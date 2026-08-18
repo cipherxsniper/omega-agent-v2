@@ -10,6 +10,7 @@ import MissionControl from "@/components/omega/MissionControl";
 import MissionAutopilotPanel from "@/components/omega/MissionAutopilotPanel";
 import MissionGraph from "@/components/omega/MissionGraph";
 import MissionRecoveryPanel from "@/components/omega/MissionRecoveryPanel";
+import MissionLedgerPanel from "@/components/omega/MissionLedgerPanel";
 
 const TABS = [
   { id: "actions", label: "Actions", icon: ListChecks },
@@ -28,7 +29,7 @@ const TOOL_ICONS = {
   none: Code,
 };
 
-export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission, missions = [], recovery, onReplay }) {
+export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission, missions = [], recovery, onReplay, ledger }) {
   const [activeTab, setActiveTab] = useState("actions");
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -111,6 +112,7 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
       <MissionAutopilotPanel mission={mission} transcript={transcript || []} isThinking={isThinking} />
       <MissionGraph mission={mission} missions={missions} transcript={transcript || []} isThinking={isThinking} />
       <MissionRecoveryPanel recovery={recovery} onReplay={onReplay} isThinking={isThinking} />
+      <MissionLedgerPanel ledger={ledger} />
 
       {/* Tabs */}
       <div className="flex border-b border-white/5 shrink-0">
