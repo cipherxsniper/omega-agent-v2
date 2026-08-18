@@ -35,7 +35,8 @@ def main():
         body = failed.get_json()
         assert body["error"] == "agent_unavailable"
         assert body["request_id"]
-        assert "simulated provider" not in failed.get_data(as_text=True)
+        assert body["diagnostic"]["type"] == "RuntimeError"
+        assert "secret" not in failed.get_data(as_text=True).lower()
 
         started = client.post("/api/job/start", json={"message": "test"})
         assert started.status_code == 200
@@ -48,7 +49,8 @@ def main():
         assert status["status"] == "failed"
         assert status["error"] == "agent_unavailable"
         assert status["request_id"] == job_id
-        assert "simulated provider" not in str(status)
+        assert status["diagnostic"]["type"] == "RuntimeError"
+        assert "secret" not in str(status).lower()
     finally:
         chat_server.run_agent_task = original
 

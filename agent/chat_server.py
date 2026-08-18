@@ -52,6 +52,14 @@ MIN_STEPS = 1
 MAX_STEPS = 100
 
 
+def _safe_failure_diagnostic(exc):
+    """Return bounded, credential-redacted failure metadata for operators."""
+    import re
+    raw = f"{type(exc).__name__}: {exc}"
+    redacted = re.sub(r"(?i)(?:sk-|gsk_|key[-_ ]?|token[-_ ]?|authorization[:= ]+)[A-Za-z0-9_./+=:-]{8,}", "[redacted]", raw)
+    return {"type": type(exc).__name__, "detail": redacted[:300]}
+
+
 def _parse_max_steps(raw, default=10):
     try:
         value = int(raw if raw is not None else default)
@@ -117,6 +125,7 @@ def _run_job(job_id, message, max_steps, images):
             _jobs[job_id].update({
                 "status": "failed",
                 "error": "agent_unavailable",
+                "diagnostic": _safe_failure_diagnostic(exc),
                 "message": "Omega could not complete this job because all configured execution paths failed. Retry shortly.",
                 "request_id": job_id,
                 "response": "Omega could not complete this job. Retry shortly.",
@@ -175,6 +184,7 @@ def chat():
             "error": "agent_unavailable",
             "message": "Omega could not complete this request because all configured execution paths failed. Retry shortly.",
             "request_id": request_id,
+            "diagnostic": _safe_failure_diagnostic(e),
         }), 503
 
     final_entry = next((e for e in reversed(transcript) if e.get("final")), None)
