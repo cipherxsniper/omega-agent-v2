@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { clearContinuityCheckpoint, readContinuityCheckpoint, writeContinuityCheckpoint } from "@/lib/continuity";
 import { appendMissionEvent, hydrateMissionLedger } from "@/lib/missionLedger";
 import { beginRecovery, detectDependency, evaluateSelfHealing } from "@/lib/selfHealing";
+import { coordinateSwarm, createNodeIdentity, createSignedObservation } from "@/lib/federatedSwarm";
 import { AnimatePresence } from "framer-motion";
 import { buildPromptWithMemory, buildConversationMessages, extractMemoryCandidate, BASE_SYSTEM_PROMPT } from "@/lib/omega-system";
 import OmegaIntro from "@/components/omega/OmegaIntro";
@@ -69,6 +70,9 @@ export default function Home() {
   const [ledger, setLedger] = useState({ status: "empty", missions: [], events: [] });
   const [selfHealing, setSelfHealing] = useState({ state: "healthy", reason: "No degraded dependency observed." });
   const selfHealingReceiptRef = useRef("");
+  const swarmIdentityRef = useRef(null);
+  const swarmReceiptRef = useRef("");
+  const [swarm, setSwarm] = useState({ state: "awaiting_observations", quorum: 0, required: 2, verified: [], rejected: [], observations: [], nodeId: "initializing" });
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -106,6 +110,45 @@ export default function Home() {
       window.dispatchEvent(new CustomEvent("omega:self-heal", { detail: { playbook: decision.playbook.id } }));
     }
   }, [isThinking, recovery?.status, recovery?.eventCount, recovery?.startedAt, ledger.status]);
+
+  useEffect(() => {
+    createNodeIdentity().then((identity) => {
+      swarmIdentityRef.current = identity;
+      setSwarm((current) => ({ ...current, nodeId: identity.nodeId }));
+    });
+    const receiveObservation = (event) => {
+      const observation = event.detail;
+      if (!observation) return;
+      setSwarm((current) => {
+        const observations = [...(current.observations || []), observation].slice(-20);
+        coordinateSwarm(observations).then((decision) => setSwarm((latest) => ({ ...latest, ...decision, observations })));
+        return current;
+      });
+    };
+    window.addEventListener("omega:swarm-observation", receiveObservation);
+    return () => window.removeEventListener("omega:swarm-observation", receiveObservation);
+  }, []);
+
+  useEffect(() => {
+    if (!swarmIdentityRef.current || !mission?.id) return;
+    createSignedObservation(swarmIdentityRef.current, {
+      missionId: mission.id,
+      signal: selfHealing?.signal?.id || "healthy",
+      proposal: selfHealing?.playbook?.id || "refresh_ledger",
+      severity: selfHealing?.signal?.severity || "low",
+    }).then((observation) => {
+      const observations = [...(swarm.observations || []).filter((item) => item.nodeId !== observation.nodeId), observation].slice(-20);
+      coordinateSwarm(observations).then((decision) => {
+        const next = { ...decision, observations, nodeId: swarmIdentityRef.current.nodeId };
+        setSwarm(next);
+        const key = `${next.state}:${next.quorum}:${next.proposal || ""}`;
+        if (swarmReceiptRef.current !== key) {
+          swarmReceiptRef.current = key;
+          appendMissionEvent({ missionId: mission.id, proofId: mission.proofId, type: `swarm_${next.state}`, status: next.state, step: next.proposal || next.signal || "observation", reason: next.state === "conflict" ? "Conflicting swarm proposals" : "Federated swarm observation" }).then(() => hydrateMissionLedger().then(setLedger));
+        }
+      });
+    });
+  }, [mission?.id, selfHealing?.state, selfHealing?.signal?.id, selfHealing?.playbook?.id]);
 
   useEffect(() => {
     if (!isThinking) return undefined;
@@ -715,6 +758,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             recovery={recovery}
             ledger={ledger}
             selfHealing={selfHealing}
+            swarm={swarm}
             onReplay={replayLastMission}
             transcript={
               isThinking && liveTranscript.length > 0
@@ -744,6 +788,7 @@ Return 3-7 steps. Be specific to the actual task.`;
                 missions={missionHistory.length ? missionHistory : ledger.missions}
                 ledger={ledger}
                 selfHealing={selfHealing}
+                swarm={swarm}
                 onReplay={replayLastMission}
                 transcript={
                   isThinking && liveTranscript.length > 0
