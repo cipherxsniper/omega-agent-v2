@@ -33,10 +33,11 @@ else
 fi
 
 git fetch --quiet "$REMOTE_NAME" main
-REMOTE_COMMIT="$(git rev-parse "$REMOTE_NAME/main")"
-[ "$REMOTE_COMMIT" = "$EXPECTED_COMMIT" ] || { echo "Unexpected source commit: $REMOTE_COMMIT" >&2; exit 1; }
+REMOTE_HEAD="$(git rev-parse "$REMOTE_NAME/main")"
+git cat-file -e "$EXPECTED_COMMIT^{commit}" || { echo "Pinned source commit is unavailable: $EXPECTED_COMMIT" >&2; exit 1; }
+git merge-base --is-ancestor "$EXPECTED_COMMIT" "$REMOTE_HEAD" || { echo "Remote does not contain the pinned source commit" >&2; exit 1; }
 
-git checkout -B main "$REMOTE_NAME/main"
+git checkout -B main "$EXPECTED_COMMIT"
 git reset --hard "$EXPECTED_COMMIT"
 
 for file in tools/omega_reliability_audit.py agent/shadow_council.py agent/replay_lab.py agent/agent_loop.py tests/test_reliability_audit.py tests/test_shadow_council.py tests/test_replay_lab.py; do
@@ -56,4 +57,5 @@ printf 'OMEGA_DEVICE_DELIVERY_VERIFIED\n'
 printf 'COMMIT=%s\n' "$(git rev-parse HEAD)"
 printf 'AUDITOR_SHA256=%s\n' "$ACTUAL_AUDIT_SHA"
 printf 'LOCAL_BACKUP=%s\n' "$BACKUP"
+printf 'REMOTE_HEAD=%s\n' "$REMOTE_HEAD"
 printf 'REMOTE=%s\n' "$(git remote get-url "$REMOTE_NAME")"
