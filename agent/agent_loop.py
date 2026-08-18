@@ -290,6 +290,7 @@ async def _execute_tool_call(executor, tool_call):
 
 
 SESSION_PATH = os.path.expanduser("~/.omega/logs/agent_session.json")
+os.makedirs(os.path.dirname(SESSION_PATH), exist_ok=True)
 
 
 def load_session():
