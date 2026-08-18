@@ -106,10 +106,64 @@ const callAgentBackend = async ({ prompt }) => {
   }
 };
 
+// Live-streaming path — uses the job/start + job/stream SSE pipeline so the
+// caller gets each transcript step as it happens (for driving WorkspacePanel
+// in real time) instead of waiting for the whole task to finish.
+const streamAgentBackend = ({ prompt, onStep }) => {
+  return new Promise(async (resolve) => {
+    try {
+      const startRes = await fetch(`${AGENT_BACKEND_URL}/api/job/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: prompt }),
+      });
+      if (!startRes.ok) {
+        const err = await startRes.text();
+        resolve({ data: { error: `Agent backend error: ${err}` } });
+        return;
+      }
+      const { job_id } = await startRes.json();
+      if (!job_id) {
+        resolve({ data: { error: "Agent backend did not return a job_id" } });
+        return;
+      }
+
+      const transcript = [];
+      const es = new EventSource(`${AGENT_BACKEND_URL}/api/job/stream/${job_id}`);
+
+      es.onmessage = (event) => {
+        const step = JSON.parse(event.data);
+        if (step.done) {
+          es.close();
+          const finalEntry = [...transcript].reverse().find((e) => e.final && typeof e.content === "string");
+          const finalText = step.response || finalEntry?.content ||
+            (step.error ? `Agent job failed: ${step.error}` : "Omega completed without a final response. Review the live transcript for details.");
+          resolve({ data: { result: finalText, transcript, error: step.error || null } });
+          return;
+        }
+        transcript.push(step);
+        if (onStep) onStep(step);
+      };
+
+      es.onerror = () => {
+        es.close();
+        resolve({ data: { error: "Lost connection to agent backend stream." } });
+      };
+    } catch (e) {
+      resolve({ data: { error: `Could not reach agent backend at ${AGENT_BACKEND_URL}: ${e.message}` } });
+    }
+  });
+};
+
 export const functions = {
   invoke: async (fnName, payload) => {
     if (fnName === "groqComplete") {
-      return callAgentBackend(payload || {});
+      const p = payload || {};
+      if (p.onStep) {
+        const { onStep, ...rest } = p;
+        return streamAgentBackend({ ...rest, onStep });
+      }
+      return callAgentBackend(p);
     }
     console.warn(`[local mode] functions.invoke("${fnName}") skipped — no backend connected.`);
     return { data: { error: `Function "${fnName}" is not available in local mode.` } };

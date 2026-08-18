@@ -171,6 +171,12 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
                       {step.description && (
                         <p className="text-[11px] text-white/30 ml-4">{step.description}</p>
                       )}
+                      {step.decision_provenance && (
+                        <div className="ml-4 mt-1 flex items-center gap-2 text-[9px] font-mono uppercase tracking-[0.12em] text-teal-200/45">
+                          <span className="rounded border border-teal-300/15 px-1.5 py-0.5">proof linked</span>
+                          {step.decision_provenance.context_hash && <span>ctx:{step.decision_provenance.context_hash.slice(0, 8)}</span>}
+                        </div>
+                      )}
                       {step.duration_ms && step.status === "completed" && (
                         <p className="text-[9px] text-white/15 ml-4 font-mono">{(step.duration_ms / 1000).toFixed(1)}s</p>
                       )}
@@ -220,22 +226,25 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
           {activeTab === "terminal" && (
             <motion.div key="terminal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
               <div className="h-full bg-black font-mono text-xs p-3 overflow-y-auto">
-                <div className="text-white/20 mb-2">Omega Terminal — omega@workspace:~$</div>
-                {steps.filter((s) => s.tool === "terminal").length === 0 ? (
-                  <p className="text-white/20">$ waiting for command...</p>
+                <div className="text-white/20 mb-2">Omega Terminal — omegaagent$</div>
+                {steps.length === 0 ? (
+                  <p className="text-white/20">omegaagent$ waiting for command...</p>
                 ) : (
-                  steps.filter((s) => s.tool === "terminal").map((s) => (
+                  steps.map((s) => (
                     <div key={s.id} className="mb-2">
-                      <div className="text-teal-400">$ {s.title}</div>
+                      <div className="text-teal-400">
+                        omegaagent$ <span className="text-white/70">{s.title}</span>
+                        {s.description && <span className="text-white/30"> — {s.description}</span>}
+                      </div>
                       {s.tool_output && (
                         <pre className="text-white/50 whitespace-pre-wrap mt-0.5">{s.tool_output}</pre>
                       )}
                     </div>
                   ))
                 )}
-                {isThinking && runningStep?.tool === "terminal" && (
+                {isThinking && runningStep && (
                   <div className="text-teal-400 flex items-center gap-1">
-                    $ <span className="animate-pulse">█</span>
+                    omegaagent$ <span className="animate-pulse">█</span>
                   </div>
                 )}
               </div>

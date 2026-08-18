@@ -118,12 +118,8 @@ export default function MessageBubble({ message }) {
       <div className={`max-w-[80%] ${isUser ? "order-1" : "order-1"}`}>
         {/* Avatar + Name */}
         <div className={`flex items-center gap-2 mb-1 ${isUser ? "justify-end" : "justify-start"}`}>
-          {!isUser && (
-            <div className="w-6 h-6 rounded-full bg-teal-500 flex items-center justify-center">
-              <span className="text-black text-xs font-black">Ω</span>
-            </div>
-          )}
-          <span className="text-xs text-white/40 font-mono">
+          {!isUser && <span className="h-1.5 w-1.5 rounded-full bg-teal-300" />}
+          <span className="text-xs font-mono text-white/40">
             {isUser ? "You" : "Omega"}
           </span>
           {message.metadata?.response_time_ms && (

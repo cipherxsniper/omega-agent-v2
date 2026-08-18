@@ -55,10 +55,12 @@ export function stepsFromTranscript(transcript) {
   const steps = [];
   for (const entry of transcript) {
     if (entry.role !== "assistant" || !entry.tool_calls) continue;
-    for (const call of entry.tool_calls) {
+    for (const [callIndex, call] of entry.tool_calls.entries()) {
       const name = call.function?.name || "unknown_tool";
       const args = safeParseArgs(call.function?.arguments || "{}");
       const result = resultsById[call.id];
+      const resultEntry = transcript.find((candidate) => candidate.role === "tool" && candidate.tool_call_id === call.id);
+      const decisionProvenance = entry.decision_provenance?.[callIndex] || resultEntry?.decision_provenance || null;
       const success = result ? result.success !== false : null;
 
       steps.push({
@@ -77,6 +79,7 @@ export function stepsFromTranscript(transcript) {
             : formatOutput(result.output)
           : null,
         tool_url: name === "web_fetch" ? args.url : undefined,
+        decision_provenance: decisionProvenance,
       });
     }
   }

@@ -24,6 +24,7 @@ from api.groq_client import chat_completion
 from agent.core.action_engine import Action, ActionNode, ActionExecutor, ActionValidator, SideEffectAnalyzer
 from agent.self_extend import propose_tool
 from lib.omega_proof import sign_event
+from agent.decision_provenance import build_decision_provenance
 
 TOOLS = [
     {
@@ -327,6 +328,8 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
         ]
 
     transcript = []
+    provenance_parent_id = None
+    available_tool_names = [item["function"]["name"] for item in TOOLS]
     loop = asyncio.new_event_loop()
 
     try:
@@ -447,9 +450,30 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                 break
 
             messages.append(message)
-            transcript.append({"step": step, "role": "assistant", "tool_calls": tool_calls})
-
+            decision_records = []
             for tc in tool_calls:
+                tool_name = tc["function"]["name"]
+                tool_args = tc["function"].get("arguments", {})
+                decision = build_decision_provenance(
+                    action=tool_name,
+                    arguments=tool_args,
+                    step=step,
+                    available_alternatives=available_tool_names,
+                    parent_id=provenance_parent_id,
+                    observed_context=transcript[-6:],
+                )
+                decision_records.append(decision)
+                provenance_parent_id = decision["decision_id"]
+                if signed_log:
+                    sign_event(signed_log, event_type="decision_provenance", data=decision)
+            transcript.append({"step": step, "role": "assistant", "tool_calls": tool_calls, "decision_provenance": decision_records})
+            if on_step:
+                try:
+                    on_step(transcript[-1])
+                except Exception:
+                    pass
+
+            for tc_index, tc in enumerate(tool_calls):
                 result = loop.run_until_complete(_execute_tool_call(executor, tc))
 
                 if signed_log:
@@ -460,7 +484,19 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                         "result": result,
                     })
 
-                transcript.append({"step": step, "role": "tool", "tool_call_id": tc["id"], "result": result})
+                decision = decision_records[tc_index]
+                transcript.append({
+                    "step": step,
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "result": result,
+                    "decision_provenance": decision,
+                })
+                if on_step:
+                    try:
+                        on_step(transcript[-1])
+                    except Exception:
+                        pass
 
                 # Cap tool-result size before it enters history. This is
                 # byte-based, not tied to today's file/repo counts, so it

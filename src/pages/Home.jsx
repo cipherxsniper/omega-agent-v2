@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
+import { clearContinuityCheckpoint, readContinuityCheckpoint, writeContinuityCheckpoint } from "@/lib/continuity";
 import { AnimatePresence } from "framer-motion";
 import { buildPromptWithMemory, buildConversationMessages, extractMemoryCandidate, BASE_SYSTEM_PROMPT } from "@/lib/omega-system";
 import OmegaIntro from "@/components/omega/OmegaIntro";
@@ -25,7 +26,11 @@ export default function Home() {
   const [isThinking, setIsThinking] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activePanel, setActivePanel] = useState(null); // jobs, memory, github, system
+  const [showMobileWorkspace, setShowMobileWorkspace] = useState(false);
   const messagesEndRef = useRef(null);
+  const [liveTranscript, setLiveTranscript] = useState([]);
+  const [resumeCheckpoint, setResumeCheckpoint] = useState(null);
+  const [continuityContext, setContinuityContext] = useState(null);
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -34,6 +39,30 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
+
+  useEffect(() => {
+    const checkpoint = readContinuityCheckpoint(activeConversationId);
+    setResumeCheckpoint(checkpoint?.status === "running" ? checkpoint : null);
+    setContinuityContext(null);
+  }, [activeConversationId]);
+
+  const persistContinuity = (conversationId, patch) => {
+    writeContinuityCheckpoint(conversationId, {
+      conversationId,
+      ...patch,
+    });
+  };
+
+  const resumeFromCheckpoint = () => {
+    if (!resumeCheckpoint) return;
+    setContinuityContext(resumeCheckpoint);
+    setResumeCheckpoint(null);
+  };
+
+  const dismissCheckpoint = () => {
+    clearContinuityCheckpoint(activeConversationId);
+    setResumeCheckpoint(null);
+  };
 
   const loadConversations = async () => {
     const data = await base44.entities.Conversation.filter({ status: "active" }, "-updated_date", 50);
@@ -133,7 +162,35 @@ Return 3-7 steps. Be specific to the actual task.`;
     await base44.entities.AgentStep.update(stepId, updates);
   };
 
-  const handleSend = async (text, mode) => {
+  const handleSend = async (text, mode, attachments = []) => {
+    const normalizedAttachments = await Promise.all(
+      attachments.map(async ({ file }) => {
+        if (!file) return null;
+        const isText = file.type.startsWith("text/") || /\.(md|txt|csv|json|xml|log)$/i.test(file.name);
+        let extractedText = "";
+        if (isText && typeof file.text === "function") {
+          extractedText = (await file.text()).slice(0, 12000);
+        }
+        const isImage = file.type.startsWith("image/");
+        return {
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          isImage,
+          extractedText,
+        };
+      }),
+    ).then((items) => items.filter(Boolean));
+    const attachmentContext = normalizedAttachments.length
+      ? `\n\nATTACHED FILES:\n${normalizedAttachments.map((item) =>
+          `- ${item.name} (${item.type}, ${item.size} bytes)${item.isImage ? "\\n[PHOTO ATTACHED: visual bytes are preserved in the composer; this backend must advertise vision support before claiming image analysis.]" : ""}${item.extractedText ? `\\n${item.extractedText}` : ""}`
+        ).join("\n")}`
+      : "";
+    const continuityNote = continuityContext
+      ? `\n\nRESUMING AN INTERRUPTED OMEGA SESSION:\nLast task: ${continuityContext.lastUserText || "Unknown"}\nLast observed step: ${continuityContext.lastStep || "No step recorded"}\nContinue from this context without repeating completed work.`
+      : "";
+    const requestText = `${text}${attachmentContext}${continuityNote}`;
+    setContinuityContext(null);
     let convId = activeConversationId;
 
     // Auto-create conversation if none selected
@@ -150,15 +207,26 @@ Return 3-7 steps. Be specific to the actual task.`;
       conversation_id: convId,
       role: "user",
       content: text,
-      metadata: { mode },
+      metadata: {
+        mode,
+        attachments: normalizedAttachments.map(({ name, type, size }) => ({ name, type, size })),
+      },
     });
     setMessages((prev) => [...prev, userMsg]);
     setIsThinking(true);
+    setLiveTranscript([]);
+    persistContinuity(convId, {
+      status: "running",
+      lastUserText: text,
+      mode,
+      attachments: normalizedAttachments.map(({ name, type, size }) => ({ name, type, size })),
+      lastStep: "Preparing Omega plan",
+    });
 
     const startTime = Date.now();
 
     // Step 1: Generate plan
-    const planSteps = await generatePlan(text, mode, convId);
+    const planSteps = await generatePlan(requestText, mode, convId);
 
     // Check for memory candidates
     const memCandidate = extractMemoryCandidate(text);
@@ -241,13 +309,13 @@ Return 3-7 steps. Be specific to the actual task.`;
     // Step 3: Generate the final response (the last plan step's actual execution)
     let userPrompt = "";
     if (mode === "research") {
-      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user wants DEEP RESEARCH on the following topic. Search the web, gather multiple sources, synthesize findings, and cite your sources with URLs. Be thorough and factual.\n\nRESEARCH REQUEST: ${text}\n\nProvide your response with:\n1. A clear reasoning chain of your research process\n2. Key findings with citations\n3. A synthesis/summary`;
+      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user wants DEEP RESEARCH on the following topic. Search the web, gather multiple sources, synthesize findings, and cite your sources with URLs. Be thorough and factual.\n\nRESEARCH REQUEST: ${requestText}\n\nProvide your response with:\n1. A clear reasoning chain of your research process\n2. Key findings with citations\n3. A synthesis/summary`;
     } else if (mode === "code") {
-      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user wants CODE GENERATION. Write clean, production-ready, well-commented code.\n\nCODE REQUEST: ${text}`;
+      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user wants CODE GENERATION. Write clean, production-ready, well-commented code.\n\nCODE REQUEST: ${requestText}`;
     } else if (mode === "self_improve") {
-      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user has asked you to SELF-IMPROVE. Analyze your current system prompt and recent conversation performance. Identify:\n1. Areas where your responses could be better\n2. Missing capabilities or knowledge gaps\n3. Suggested improvements to your system prompt\n4. A revised system prompt if improvements are needed\n\nBe specific and actionable in your self-analysis.\n\nCurrent system prompt:\n${systemPromptContent}\n\nUser request: ${text}`;
+      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nThe user has asked you to SELF-IMPROVE. Analyze your current system prompt and recent conversation performance. Identify:\n1. Areas where your responses could be better\n2. Missing capabilities or knowledge gaps\n3. Suggested improvements to your system prompt\n4. A revised system prompt if improvements are needed\n\nBe specific and actionable in your self-analysis.\n\nCurrent system prompt:\n${systemPromptContent}\n\nUser request: ${requestText}`;
     } else {
-      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nUser: ${text}`;
+      userPrompt = `${fullSystemPrompt}\n\nCONVERSATION HISTORY:\n${conversationHistory}\n\nUser: ${requestText}`;
     }
 
     let response;
@@ -273,6 +341,15 @@ Return 3-7 steps. Be specific to the actual task.`;
             },
           },
         },
+        onStep: (step) => {
+          setLiveTranscript((prev) => [...prev, step]);
+          persistContinuity(convId, {
+            status: "running",
+            lastUserText: text,
+            mode,
+            lastStep: step.title || step.name || step.role || "Working",
+          });
+        },
       });
       response = response.data || response;
     } else {
@@ -285,6 +362,15 @@ Return 3-7 steps. Be specific to the actual task.`;
             response: { type: "string" },
           },
         },
+        onStep: (step) => {
+          setLiveTranscript((prev) => [...prev, step]);
+          persistContinuity(convId, {
+            status: "running",
+            lastUserText: text,
+            mode,
+            lastStep: step.title || step.name || step.role || "Working",
+          });
+        },
       });
       response = response.data || response;
     }
@@ -292,7 +378,10 @@ Return 3-7 steps. Be specific to the actual task.`;
     const responseTime = Date.now() - startTime;
 
     // Parse response
-    let content = typeof response === "string" ? response : response.result || response.response || JSON.stringify(response);
+    let content = typeof response === "string" ? response : response.result || response.response || "";
+    if (!String(content).trim()) {
+      content = response?.error || "Omega returned no final text. Review the live workspace transcript and retry once the backend is reachable.";
+    }
     const reasoning = typeof response === "object" ? response.reasoning : null;
     const sources = typeof response === "object" && response.sources ? response.sources : [];
 
@@ -301,7 +390,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     let wasRevised = false;
     try {
       verificationResult = await base44.functions.invoke("responseVerification", {
-        request: text,
+        request: requestText,
         response: content,
         reasoningChain: reasoning,
         context: mode === "research" ? JSON.stringify(sources) : conversationHistory,
@@ -379,6 +468,7 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
+    clearContinuityCheckpoint(convId);
 
     // Update conversation title if first message
     if (messages.length === 0) {
@@ -427,11 +517,25 @@ Return 3-7 steps. Be specific to the actual task.`;
         <div className="flex-1 flex flex-col min-w-0">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 md:px-8 lg:px-12 py-6">
+            {resumeCheckpoint && (
+              <div className="mx-auto mb-6 max-w-2xl rounded-2xl border border-teal-300/20 bg-teal-300/[0.05] p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-mono uppercase tracking-[0.16em] text-teal-200/80">Session checkpoint</div>
+                    <p className="mt-2 text-sm text-white/75">Omega was interrupted while working on “{resumeCheckpoint.lastUserText || "your task"}”.</p>
+                    <p className="mt-1 text-xs text-white/40">Last observed step: {resumeCheckpoint.lastStep || "Preparing"}</p>
+                  </div>
+                  <button type="button" onClick={dismissCheckpoint} className="text-xs text-white/35 hover:text-white/70">Dismiss</button>
+                </div>
+                <button type="button" onClick={resumeFromCheckpoint} className="mt-4 rounded-lg bg-teal-300 px-3 py-2 text-xs font-semibold text-black transition hover:bg-teal-200">Resume context</button>
+              </div>
+            )}
             {messages.length === 0 ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center max-w-md">
-                  <div className="w-16 h-16 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center mx-auto mb-6">
-                    <span className="text-teal-400 font-black text-2xl">Ω</span>
+                  <div className="mb-6 flex items-center justify-center gap-2 text-xs font-mono uppercase tracking-[0.18em] text-teal-300/80">
+                    <span className="h-1.5 w-1.5 rounded-full bg-teal-300 shadow-[0_0_12px_rgba(94,234,212,0.8)]" />
+                    Workspace ready
                   </div>
                   <h2 className="text-white text-xl font-bold mb-2">What can I help you with?</h2>
                   <p className="text-white/30 text-sm mb-8">
@@ -471,21 +575,59 @@ Return 3-7 steps. Be specific to the actual task.`;
 
           {/* Input */}
           <div className="px-4 md:px-8 lg:px-12 pb-4 pt-2">
-            <ChatInput onSend={handleSend} disabled={isThinking} />
+            <ChatInput onSend={handleSend} disabled={isThinking} sandboxAvailable={isThinking || liveTranscript.length > 0} />
             <p className="text-center text-[10px] text-white/10 mt-2 font-mono">
               Omega v1.0 — Super Agent by Thomas Lee Harvey
             </p>
           </div>
         </div>
 
-        {/* Workspace panel — always visible (Manus style) */}
+        {/* Workspace panel — desktop: always visible side panel */}
         <div className="w-[420px] shrink-0 hidden lg:block">
           <WorkspacePanel
             conversationId={activeConversationId}
             isThinking={isThinking}
-            transcript={[...messages].reverse().find((m) => m.role === "assistant" && m.transcript)?.transcript}
+            transcript={
+              isThinking && liveTranscript.length > 0
+                ? liveTranscript
+                : [...messages].reverse().find((m) => m.role === "assistant" && m.transcript)?.transcript
+            }
           />
         </div>
+
+        {/* Workspace panel — mobile: floating toggle + full-screen overlay */}
+        <button
+          onClick={() => setShowMobileWorkspace(true)}
+          className="lg:hidden fixed bottom-24 right-4 z-40 rounded-xl border border-teal-300/30 bg-[#122321] px-3 py-2 text-xs font-medium text-teal-200 shadow-lg shadow-teal-500/10 transition hover:bg-[#18332f]"
+          title="View live activity"
+        >
+          View activity
+        </button>
+
+        {showMobileWorkspace && (
+          <div className="lg:hidden fixed inset-0 z-50 bg-black flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <span className="text-white text-sm font-mono">Omega Sandbox</span>
+              <button
+                onClick={() => setShowMobileWorkspace(false)}
+                className="text-white/50 hover:text-white p-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <WorkspacePanel
+                conversationId={activeConversationId}
+                isThinking={isThinking}
+                transcript={
+                  isThinking && liveTranscript.length > 0
+                    ? liveTranscript
+                    : [...messages].reverse().find((m) => m.role === "assistant" && m.transcript)?.transcript
+                }
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal overlays for nav panels */}
