@@ -7,6 +7,7 @@ import {
   XCircle, Clock, Search, Brain, Code, Monitor,
 } from "lucide-react";
 import MissionControl from "@/components/omega/MissionControl";
+import MissionAutopilotPanel from "@/components/omega/MissionAutopilotPanel";
 
 const TABS = [
   { id: "actions", label: "Actions", icon: ListChecks },
@@ -105,6 +106,7 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
       )}
 
       <MissionControl mission={mission} steps={steps} isThinking={isThinking} />
+      <MissionAutopilotPanel mission={mission} transcript={transcript || []} isThinking={isThinking} />
 
       {/* Tabs */}
       <div className="flex border-b border-white/5 shrink-0">
