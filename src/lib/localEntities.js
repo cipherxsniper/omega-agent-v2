@@ -84,7 +84,7 @@ export const entities = new Proxy({}, {
 
 // --- Real backend call, replacing the old direct-from-browser Groq call ---
 // No API key here — the key lives only on the server now (chat_server.py).
-const AGENT_BACKEND_URL = import.meta.env.VITE_AGENT_BACKEND_URL || "http://localhost:8420";
+const AGENT_BACKEND_URL = import.meta.env.VITE_AGENT_BACKEND_URL || "https://omega-agent-backend-v2.onrender.com";
 
 const callAgentBackend = async ({ prompt }) => {
   try {
