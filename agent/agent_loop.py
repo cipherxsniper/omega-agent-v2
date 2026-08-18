@@ -304,7 +304,7 @@ def save_session(messages):
         json.dump({"messages": messages, "saved_at": time.time()}, f, indent=2, default=str)
 
 
-def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False):
+def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False, on_step=None, require_plan=False):
     """
     Runs the real tool-use loop synchronously (wraps async internals).
     Returns the full transcript: list of {step, role, content/tool_calls/tool_result}.
@@ -444,7 +444,13 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                             + final_content
                         )
 
-                transcript.append({"step": step, "role": "assistant", "content": final_content, "final": True})
+                final_entry = {"step": step, "role": "assistant", "content": final_content, "final": True}
+                transcript.append(final_entry)
+                if on_step:
+                    try:
+                        on_step(final_entry)
+                    except Exception:
+                        pass
                 if signed_log:
                     sign_event(signed_log, event_type="agent_final", data={"step": step, "content": final_content[:1000]})
                 break
@@ -521,7 +527,19 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                     "content": result_json,
                 })
         else:
-            transcript.append({"step": max_steps, "role": "system", "content": f"Stopped: hit max_steps ({max_steps}) without model finishing."})
+            final_entry = {
+                "step": max_steps,
+                "role": "assistant",
+                "content": f"Omega reached the execution limit of {max_steps} steps before the model produced a final response. The observable transcript above is complete; continue from the last verified step to resume.",
+                "final": True,
+                "completion_status": "max_steps",
+            }
+            transcript.append(final_entry)
+            if on_step:
+                try:
+                    on_step(final_entry)
+                except Exception:
+                    pass
 
     finally:
         loop.close()

@@ -37,6 +37,56 @@ ALLOWED_ORIGINS = [
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}})
 
 LOG_PATH = os.path.expanduser("~/.omega/logs/agent_loop_signed.log")
+CWD_HINT = os.path.expanduser("~/omega_workspace") + (
+    " — this contains all Omega repos as subdirectories: "
+    "OMEGAOPS.AI, omega, Omega-Ecosystem-App, omega-art-studio, "
+    "omega-fintech, omega-financial-core, Omega-Core, "
+    "omega-agent-v2, Omega_Finacial_Network. Use paths like "
+    "'OMEGAOPS.AI/omega_v10.py' relative to this root."
+)
+_jobs = {}
+_jobs_lock = threading.Lock()
+
+
+def _run_job(job_id, message, max_steps):
+    with _jobs_lock:
+        job = _jobs[job_id]
+        job["status"] = "running"
+    step_queue = job["step_queue"]
+
+    def on_step(step_dict):
+        with _jobs_lock:
+            _jobs[job_id].setdefault("transcript", []).append(step_dict)
+        step_queue.put(step_dict)
+
+    try:
+        transcript = run_agent_task(
+            message,
+            max_steps=max_steps,
+            signed_log=LOG_PATH,
+            cwd_hint=CWD_HINT,
+            on_step=on_step,
+        )
+        final_entry = next((entry for entry in reversed(transcript) if entry.get("final")), None)
+        final_text = final_entry.get("content", "") if final_entry else "Omega finished without a final entry; review the observable transcript."
+        with _jobs_lock:
+            _jobs[job_id].update({
+                "status": "done",
+                "response": final_text,
+                "transcript": transcript,
+                "finished_at": time.time(),
+            })
+    except Exception as exc:
+        logger.error("Job %s failed: %s", job_id, exc, exc_info=True)
+        with _jobs_lock:
+            _jobs[job_id].update({
+                "status": "failed",
+                "error": str(exc),
+                "response": f"Omega job failed before completion: {exc}",
+                "finished_at": time.time(),
+            })
+    finally:
+        step_queue.put(None)
 
 
 @app.route("/api/health", methods=["GET"])
