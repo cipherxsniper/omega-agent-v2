@@ -350,6 +350,12 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
 
             if not tool_calls:
                 final_content = message.get("content", "")
+                if not isinstance(final_content, str) or not final_content.strip():
+                    final_content = (
+                        "Omega completed the observable agent loop, but the model returned "
+                        "no final narrative. Review the live workspace transcript for the "
+                        "verified steps and retry the request once the provider responds normally."
+                    )
                 narrative_text = final_content  # pristine copy, before any system-appended blocks
 
                 # Ground-truth failure check. The model's own summary is not
