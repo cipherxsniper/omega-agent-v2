@@ -145,8 +145,11 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
             "model": current_model,
             "messages": _sanitize_messages(messages),
             "temperature": temperature,
-            "max_tokens": max_tokens,
         }
+        if has_images:
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
         if reasoning_effort:
