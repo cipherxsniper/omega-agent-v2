@@ -6,6 +6,8 @@ import time
 import logging
 import requests
 
+from api import claude_client
+
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
@@ -104,6 +106,21 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
     resets, so on 429 we move to the next tier immediately.
     """
     import re
+
+    if _tier_start_index == 0 and os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            claude_result = claude_client.chat_completion(
+                messages,
+                max_tokens=max_tokens,
+                tools=tools,
+                return_message=True,
+            )
+            return claude_result if return_message else claude_result.get("content", "")
+        except Exception as exc:
+            logger.warning("Claude primary failed; falling through to Groq: %s", exc)
+
+    if not GROQ_API_KEY:
+        raise RuntimeError("No model provider is configured: set ANTHROPIC_API_KEY or GROQ_API_KEY")
 
     has_images = any(
         isinstance(message.get("content"), list)
