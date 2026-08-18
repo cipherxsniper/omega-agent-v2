@@ -24,7 +24,8 @@ const deriveTasks = (mission, transcript = []) => {
     }));
   }
   return calls.map((call, index) => {
-    const result = results[index]?.result || {};
+    const toolEntry = results[index] || {};
+    const result = toolEntry.result || {};
     const blocked = result.error === "Shadow Council vetoed action" || result.shadow_council?.approved === false;
     const complete = result.success === true;
     return {
@@ -33,7 +34,7 @@ const deriveTasks = (mission, transcript = []) => {
       description: blocked ? "Blocked by Shadow Council" : complete ? "Evidence received" : "Awaiting execution",
       status: blocked ? "blocked" : complete ? "verified" : index === calls.length - 1 ? "active" : "pending",
       dependency: index > 0 ? `${mission?.id || "mission"}-task-${index - 1}` : null,
-      receipt: result.shadow_council?.receipt_hash || result.output?.evidence_hash || null,
+      receipt: result.shadow_council?.receipt_hash || result.output?.evidence_hash || result.proof_id || result.proofId || toolEntry.proof_id || toolEntry.proofId || toolEntry.context_id || toolEntry.ctx || null,
     };
   });
 };
