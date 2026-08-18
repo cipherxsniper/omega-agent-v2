@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, CircleDashed, Fingerprint, ShieldCheck, Target } from "lucide-react";
+import { Activity, CheckCircle2, CircleDashed, Fingerprint, ShieldCheck, Target } from "lucide-react";
 
 export default function MissionControl({ mission, steps = [], isThinking }) {
   if (!mission) return null;
@@ -48,6 +48,15 @@ export default function MissionControl({ mission, steps = [], isThinking }) {
           </div>
         </div>
       </div>
+
+      {mission.flightRecorder && (
+        <div className="mt-2 rounded-lg border border-teal-300/10 bg-black/20 p-2">
+          <div className="mb-1 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-white/35"><Activity className="h-3 w-3" /> flight recorder</div>
+          <div className="text-[10px] text-white/55">{mission.flightRecorder.evidence}</div>
+          <div className="mt-1 break-all font-mono text-[9px] text-teal-200/60">$ {mission.flightRecorder.command}</div>
+          <div className="mt-1 text-[9px] text-amber-200/70">{mission.flightRecorder.status}</div>
+        </div>
+      )}
 
       <div className="mt-2 flex items-center justify-between gap-2 text-[9px] font-mono text-white/30">
         <span className="truncate">boundary: {mission.boundary}</span>

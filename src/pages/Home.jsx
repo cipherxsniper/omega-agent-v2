@@ -38,6 +38,11 @@ const buildMission = async (text, mode, attachments) => {
     ],
     evidence: ["assistant response", "live step transcript", "proof-linked decision record"],
     boundary: "observable actions only · no hidden reasoning",
+    flightRecorder: {
+      command: "python3 agent/flight_recorder.py --production",
+      evidence: "Ed25519-signed case chain with replay files for failures",
+      status: "available · requires configured PROOFCHAIN signer",
+    },
     createdAt: new Date().toISOString(),
   };
 };
