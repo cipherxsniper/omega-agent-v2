@@ -48,6 +48,16 @@ _jobs = {}
 _jobs_lock = threading.Lock()
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MIN_STEPS = 1
+MAX_STEPS = 100
+
+
+def _parse_max_steps(raw, default=10):
+    try:
+        value = int(raw if raw is not None else default)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_steps must be an integer") from exc
+    return max(MIN_STEPS, min(MAX_STEPS, value))
 
 
 def _validate_images(raw_images):
@@ -106,8 +116,10 @@ def _run_job(job_id, message, max_steps, images):
         with _jobs_lock:
             _jobs[job_id].update({
                 "status": "failed",
-                "error": str(exc),
-                "response": f"Omega job failed before completion: {exc}",
+                "error": "agent_unavailable",
+                "message": "Omega could not complete this job because all configured execution paths failed. Retry shortly.",
+                "request_id": job_id,
+                "response": "Omega could not complete this job. Retry shortly.",
                 "finished_at": time.time(),
             })
     finally:
@@ -116,15 +128,25 @@ def _run_job(job_id, message, max_steps, images):
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    runtime_ok = os.path.isdir(os.path.expanduser("~/.omega/logs"))
+    provider_ok = bool(os.getenv("GROQ_API_KEY"))
+    status = "ok" if runtime_ok and provider_ok else "degraded"
+    response = jsonify({
+        "status": status,
+        "runtime_logs": runtime_ok,
+        "provider_configured": provider_ok,
+        "proof_telemetry": bool(os.getenv("PROOFCHAIN_SIGNING_KEY") or os.getenv("PROOFCHAIN_KEYFILE")),
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     body = request.get_json(silent=True) or {}
     message = body.get("message", "").strip()
-    max_steps = int(body.get("max_steps", 10))
     try:
+        max_steps = _parse_max_steps(body.get("max_steps"), default=10)
         images = _validate_images(body.get("images", []))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -147,8 +169,13 @@ def chat():
             image_inputs=images,
         )
     except Exception as e:
-        logger.error(f"Agent task failed: {e}", exc_info=True)
-        return jsonify({"error": f"Agent execution failed: {e}"}), 500
+        request_id = str(uuid.uuid4())
+        logger.error("Agent task failed request_id=%s: %s", request_id, e, exc_info=True)
+        return jsonify({
+            "error": "agent_unavailable",
+            "message": "Omega could not complete this request because all configured execution paths failed. Retry shortly.",
+            "request_id": request_id,
+        }), 503
 
     final_entry = next((e for e in reversed(transcript) if e.get("final")), None)
     final_text = final_entry["content"] if final_entry else "(no final response — see transcript)"
@@ -167,8 +194,8 @@ def job_start():
     where a durable plan matters most."""
     body = request.get_json(silent=True) or {}
     message = body.get("message", "").strip()
-    max_steps = int(body.get("max_steps", 100))
     try:
+        max_steps = _parse_max_steps(body.get("max_steps"), default=100)
         images = _validate_images(body.get("images", []))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

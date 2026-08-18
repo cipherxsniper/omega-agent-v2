@@ -16,6 +16,8 @@ import json
 import time
 import asyncio
 import re
+import logging
+import tempfile
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.expanduser('~/.omega/lib'))
@@ -25,6 +27,23 @@ from agent.core.action_engine import Action, ActionNode, ActionExecutor, ActionV
 from agent.self_extend import propose_tool
 from lib.omega_proof import sign_event
 from agent.decision_provenance import build_decision_provenance
+
+logger = logging.getLogger("OmegaAgentLoop")
+RUNTIME_LOG_DIR = os.path.expanduser("~/.omega/logs")
+os.makedirs(RUNTIME_LOG_DIR, exist_ok=True)
+
+
+def _safe_sign_event(signed_log, event_type, data):
+    if not signed_log:
+        return
+    try:
+        sign_event(signed_log, event_type=event_type, data=data)
+    except Exception as exc:
+        # Evidence misconfiguration must never take down an otherwise valid chat.
+        # The event remains observable in the transcript and the warning is
+        # available in the service log for operational repair.
+        logger.warning("proof event skipped for %s: %s", event_type, exc)
+
 
 TOOLS = [
     {
@@ -301,8 +320,23 @@ def load_session():
 
 
 def save_session(messages):
-    with open(SESSION_PATH, "w") as f:
-        json.dump({"messages": messages, "saved_at": time.time()}, f, indent=2, default=str)
+    os.makedirs(os.path.dirname(SESSION_PATH), exist_ok=True)
+    directory = os.path.dirname(SESSION_PATH)
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=".agent-session-", dir=directory, text=True)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"messages": messages, "saved_at": time.time()}, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, SESSION_PATH)
+    except Exception as exc:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        logger.warning("session persistence skipped: %s", exc)
 
 
 def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=None, resume=False, on_step=None, require_plan=False, image_inputs=None):
@@ -469,8 +503,7 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                         on_step(final_entry)
                     except Exception:
                         pass
-                if signed_log:
-                    sign_event(signed_log, event_type="agent_final", data={"step": step, "content": final_content[:1000]})
+                _safe_sign_event(signed_log, event_type="agent_final", data={"step": step, "content": final_content[:1000]})
                 break
 
             messages.append(message)
@@ -488,8 +521,7 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
                 )
                 decision_records.append(decision)
                 provenance_parent_id = decision["decision_id"]
-                if signed_log:
-                    sign_event(signed_log, event_type="decision_provenance", data=decision)
+                _safe_sign_event(signed_log, event_type="decision_provenance", data=decision)
             transcript.append({"step": step, "role": "assistant", "tool_calls": tool_calls, "decision_provenance": decision_records})
             if on_step:
                 try:
@@ -500,13 +532,12 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
             for tc_index, tc in enumerate(tool_calls):
                 result = loop.run_until_complete(_execute_tool_call(executor, tc))
 
-                if signed_log:
-                    sign_event(signed_log, event_type="tool_call", data={
-                        "step": step,
-                        "tool": tc["function"]["name"],
-                        "arguments": tc["function"]["arguments"],
-                        "result": result,
-                    })
+                _safe_sign_event(signed_log, event_type="tool_call", data={
+                    "step": step,
+                    "tool": tc["function"]["name"],
+                    "arguments": tc["function"]["arguments"],
+                    "result": result,
+                })
 
                 decision = decision_records[tc_index]
                 transcript.append({
@@ -561,7 +592,10 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
 
     finally:
         loop.close()
-        save_session(messages)
+        try:
+            save_session(messages)
+        except Exception as exc:
+            logger.warning("session cleanup skipped: %s", exc)
 
     return transcript
 

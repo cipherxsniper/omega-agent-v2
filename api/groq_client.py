@@ -135,7 +135,12 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
                 last_error = f"{current_model}: skipped, request (~{est}t) exceeds {tpm_limit} TPM"
                 continue
 
-        _check_rate_guard()
+        try:
+            _check_rate_guard()
+        except Exception as exc:
+            last_error = f"{current_model}: local guard blocked request: {exc}"
+            logger.warning(last_error)
+            continue
         payload = {
             "model": current_model,
             "messages": _sanitize_messages(messages),
@@ -158,7 +163,16 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
                 ) else "medium"
             # llama-3.x models: reasoning_effort not supported at all - omit it
 
-        resp = _post_once(payload)
+        try:
+            resp = _post_once(payload)
+        except requests.RequestException as exc:
+            last_error = f"{current_model}: transport error: {exc}"
+            logger.warning(last_error)
+            continue
+        except Exception as exc:
+            last_error = f"{current_model}: unexpected request error: {exc}"
+            logger.warning(last_error)
+            continue
 
         if resp.status_code == 429:
             wait_match = re.search(r"try again in ([\d.]+)s", resp.text)
@@ -174,14 +188,26 @@ def chat_completion(messages, model=None, temperature=0.3, max_tokens=2048,
                 continue
             else:
                 time.sleep(wait_s + 1.5 if wait_s else 15.0)
-                resp = _post_once(payload)
+                try:
+                    resp = _post_once(payload)
+                except requests.RequestException as exc:
+                    last_error = f"{current_model}: retry transport error: {exc}"
+                    logger.warning(last_error)
+                    continue
 
         if not resp.ok:
             logger.warning(f"{current_model} failed ({resp.status_code}): {resp.text[:200]}")
             last_error = f"{current_model}: {resp.text}"
             continue
 
-        message = resp.json()["choices"][0]["message"]
+        try:
+            message = resp.json()["choices"][0]["message"]
+            if not isinstance(message, dict):
+                raise ValueError("provider returned a non-object message")
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            last_error = f"{current_model}: malformed provider response: {exc}"
+            logger.warning(last_error)
+            continue
         if idx > 0:
             logger.info(f"Served by fallback tier: {current_model} (tier index {idx})")
         if return_message:
