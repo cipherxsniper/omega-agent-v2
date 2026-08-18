@@ -249,7 +249,7 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     const newMission = await buildMission(text, mode, normalizedAttachments);
     setMission(newMission);
-    setMissionHistory((previous) => [...previous.filter((item) => item.id !== newMission.id), newMission].slice(-6));
+    setMissionHistory((previous) => [...previous.filter((item) => item.id !== newMission.id), { ...newMission, status: "active", transcript: [] }].slice(-6));
 
     // Save user message
     const userMsg = await base44.entities.Message.create({
@@ -526,7 +526,12 @@ Return 3-7 steps. Be specific to the actual task.`;
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
     clearContinuityCheckpoint(convId);
-    setMission((current) => current ? { ...current, completedAt: new Date().toISOString() } : current);
+    const completedAt = new Date().toISOString();
+    setMission((current) => current ? { ...current, completedAt, status: "verified", transcript: response.transcript || [] } : current);
+    setMissionHistory((previous) => previous.map((item) => item.id === newMission.id
+      ? { ...item, completedAt, status: "verified", transcript: response.transcript || [] }
+      : item
+    ));
 
     // Update conversation title if first message
     if (messages.length === 0) {

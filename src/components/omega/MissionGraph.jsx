@@ -31,7 +31,7 @@ export default function MissionGraph({ mission, missions = [], transcript = [], 
   const [selected, setSelected] = useState(null);
   const allMissions = useMemo(() => {
     const source = missions.length ? missions : mission ? [mission] : [];
-    return source.filter(Boolean).map((item) => ({ ...item, graphTasks: item.id === mission?.id ? deriveTasks(item, transcript) : deriveTasks(item, []) }));
+    return source.filter(Boolean).map((item) => ({ ...item, graphTasks: deriveTasks(item, item.id === mission?.id ? transcript : (item.transcript || [])) }));
   }, [mission, missions, transcript]);
 
   if (!allMissions.length) return null;
