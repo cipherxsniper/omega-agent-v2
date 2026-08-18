@@ -61,6 +61,7 @@ export default function Home() {
   const [resumeCheckpoint, setResumeCheckpoint] = useState(null);
   const [continuityContext, setContinuityContext] = useState(null);
   const [mission, setMission] = useState(null);
+  const [missionHistory, setMissionHistory] = useState([]);
 
   useEffect(() => {
     if (!showIntro) loadConversations();
@@ -248,6 +249,7 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     const newMission = await buildMission(text, mode, normalizedAttachments);
     setMission(newMission);
+    setMissionHistory((previous) => [...previous.filter((item) => item.id !== newMission.id), newMission].slice(-6));
 
     // Save user message
     const userMsg = await base44.entities.Message.create({
@@ -644,6 +646,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             conversationId={activeConversationId}
             isThinking={isThinking}
             mission={mission}
+            missions={missionHistory}
             transcript={
               isThinking && liveTranscript.length > 0
                 ? liveTranscript
@@ -669,6 +672,7 @@ Return 3-7 steps. Be specific to the actual task.`;
                 conversationId={activeConversationId}
                 isThinking={isThinking}
                 mission={mission}
+                missions={missionHistory}
                 transcript={
                   isThinking && liveTranscript.length > 0
                     ? liveTranscript

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import MissionControl from "@/components/omega/MissionControl";
 import MissionAutopilotPanel from "@/components/omega/MissionAutopilotPanel";
+import MissionGraph from "@/components/omega/MissionGraph";
 
 const TABS = [
   { id: "actions", label: "Actions", icon: ListChecks },
@@ -26,7 +27,7 @@ const TOOL_ICONS = {
   none: Code,
 };
 
-export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission }) {
+export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission, missions = [] }) {
   const [activeTab, setActiveTab] = useState("actions");
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -107,6 +108,7 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
 
       <MissionControl mission={mission} steps={steps} isThinking={isThinking} />
       <MissionAutopilotPanel mission={mission} transcript={transcript || []} isThinking={isThinking} />
+      <MissionGraph mission={mission} missions={missions} transcript={transcript || []} isThinking={isThinking} />
 
       {/* Tabs */}
       <div className="flex border-b border-white/5 shrink-0">
