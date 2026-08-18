@@ -425,7 +425,10 @@ def run_agent_task(task_description, max_steps=10, signed_log=None, cwd_hint=Non
         for step in range(max_steps):
             MAX_RECENT_MESSAGES = 6
             trimmed = messages[:2] + messages[2:][-MAX_RECENT_MESSAGES:]
-            effort = "default"
+            # Do not send a model-specific reasoning value by default. The
+            # provider router can still receive an explicit operator setting,
+            # but an invented `default` value must not take down every tier.
+            effort = os.environ.get("OMEGA_REASONING_EFFORT") or None
 
             message = chat_completion(
                 trimmed,
