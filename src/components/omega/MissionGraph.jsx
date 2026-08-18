@@ -12,6 +12,17 @@ const deriveTasks = (mission, transcript = []) => {
   const calls = transcript.flatMap((entry) => entry?.role === "assistant" && Array.isArray(entry.tool_calls) ? entry.tool_calls : []);
   const results = transcript.filter((entry) => entry?.role === "tool");
   if (Array.isArray(mission?.tasks) && mission.tasks.length) return mission.tasks;
+  if (!calls.length && Array.isArray(mission?.events) && mission.events.length) {
+    const durableEvents = mission.events.filter((event) => ["sse_step", "recovered", "degraded", "blocked", "exhausted"].includes(event.type));
+    return durableEvents.map((event, index) => ({
+      id: `${mission?.id || "mission"}-ledger-task-${index}`,
+      title: event.step || (event.type === "recovered" ? "Mission response verified" : event.type.replaceAll("_", " ")),
+      description: event.reason || (event.type === "sse_step" ? "Observed checkpoint from durable ledger" : "Durable mission state"),
+      status: ["recovered"].includes(event.type) ? "verified" : ["blocked", "exhausted", "degraded"].includes(event.type) ? "blocked" : event.status === "checkpointed" ? "verified" : "pending",
+      dependency: index > 0 ? `${mission?.id || "mission"}-ledger-task-${index - 1}` : null,
+      receipt: event.receiptHash || event.evidenceHash || null,
+    }));
+  }
   return calls.map((call, index) => {
     const result = results[index]?.result || {};
     const blocked = result.error === "Shadow Council vetoed action" || result.shadow_council?.approved === false;
