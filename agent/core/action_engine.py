@@ -192,7 +192,11 @@ class ActionExecutor:
                 
         return execution_trace
 
-    OMEGA_WORKSPACE = os.path.expanduser("~/omega_workspace")
+    # Render and fresh Termux installs may not have the workspace hub yet.
+    # Create the approved runtime directory before any tool executes so
+    # run_bash cannot fail solely because its cwd is absent.
+    OMEGA_WORKSPACE = os.path.abspath(os.path.expanduser(os.environ.get("OMEGA_WORKSPACE", "~/omega_workspace")))
+    os.makedirs(OMEGA_WORKSPACE, exist_ok=True)
     OMEGA_ROOT = os.path.realpath(OMEGA_WORKSPACE)
 
     @classmethod
