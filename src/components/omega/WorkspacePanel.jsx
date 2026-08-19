@@ -7,6 +7,12 @@ import {
   XCircle, Clock, Search, Brain, Code, Monitor,
 } from "lucide-react";
 import MissionControl from "@/components/omega/MissionControl";
+import MissionAutopilotPanel from "@/components/omega/MissionAutopilotPanel";
+import MissionGraph from "@/components/omega/MissionGraph";
+import MissionRecoveryPanel from "@/components/omega/MissionRecoveryPanel";
+import MissionLedgerPanel from "@/components/omega/MissionLedgerPanel";
+import SelfHealingPanel from "@/components/omega/SelfHealingPanel";
+import FederatedSwarmPanel from "@/components/omega/FederatedSwarmPanel";
 
 const TABS = [
   { id: "actions", label: "Actions", icon: ListChecks },
@@ -25,7 +31,7 @@ const TOOL_ICONS = {
   none: Code,
 };
 
-export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission }) {
+export default function WorkspacePanel({ conversationId, isThinking, onClose, transcript, mission, missions = [], recovery, onReplay, ledger, selfHealing, swarm }) {
   const [activeTab, setActiveTab] = useState("actions");
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -70,7 +76,7 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
   const progressPercent = steps.length > 0 ? Math.round((completedCount / steps.length) * 100) : 0;
 
   return (
-    <div className="h-full flex flex-col bg-black border-l border-white/5">
+    <div className="h-full min-h-0 flex flex-col bg-black border-l border-white/5">
       {/* Header */}
       <div className="px-3 py-2.5 border-b border-white/5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
@@ -104,10 +110,17 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
         </div>
       )}
 
-      <MissionControl mission={mission} steps={steps} isThinking={isThinking} />
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <MissionControl mission={mission} steps={steps} isThinking={isThinking} />
+        <MissionAutopilotPanel mission={mission} transcript={transcript || []} isThinking={isThinking} />
+        <MissionGraph mission={mission} missions={missions} transcript={transcript || []} isThinking={isThinking} />
+        <MissionRecoveryPanel recovery={recovery} onReplay={onReplay} isThinking={isThinking} />
+        <MissionLedgerPanel ledger={ledger} />
+        <SelfHealingPanel state={selfHealing} />
+        <FederatedSwarmPanel swarm={swarm} />
 
-      {/* Tabs */}
-      <div className="flex border-b border-white/5 shrink-0">
+        {/* Tabs */}
+        <div className="flex border-b border-white/5 shrink-0 sticky top-0 z-20 bg-black/95 backdrop-blur">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -127,8 +140,8 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
         })}
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+        {/* Content */}
+        <div className="min-h-[220px]">
         <AnimatePresence mode="wait">
           {activeTab === "actions" && (
             <motion.div key="actions" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="p-3 space-y-1">
@@ -278,6 +291,7 @@ export default function WorkspacePanel({ conversationId, isThinking, onClose, tr
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
       </div>
     </div>
   );

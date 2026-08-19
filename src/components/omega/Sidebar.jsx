@@ -14,6 +14,8 @@ import {
   Trash2,
   Sparkles,
   Plug,
+  Search,
+  X,
 } from "lucide-react";
 
 export default function Sidebar({
@@ -27,6 +29,12 @@ export default function Sidebar({
   onToggle,
 }) {
   const [hoveredId, setHoveredId] = useState(null);
+  const [query, setQuery] = useState("");
+
+  const filteredConversations = conversations.filter((conversation) => {
+    const haystack = `${conversation.title || ""} ${conversation.id || ""}`.toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  });
 
   const navItems = [
     { id: "templates", label: "Agent Templates", icon: Sparkles },
@@ -83,11 +91,28 @@ export default function Sidebar({
 
       {/* Conversations */}
       {!collapsed && (
-        <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
-          <p className="text-[10px] text-white/20 uppercase tracking-wider font-mono px-3 py-2">
-            Conversations
-          </p>
-          {conversations.map((c) => (
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 space-y-0.5">
+          <div className="sticky top-0 z-10 bg-black/95 pt-2 pb-2">
+            <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 focus-within:border-teal-400/40">
+              <Search className="h-3.5 w-3.5 shrink-0 text-white/30" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search conversations"
+                aria-label="Search conversations"
+                className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none placeholder:text-white/25"
+              />
+              {query && (
+                <button type="button" onClick={() => setQuery("")} aria-label="Clear conversation search" className="text-white/30 hover:text-white">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-white/20 uppercase tracking-wider font-mono px-1 pt-2">
+              Conversations · {filteredConversations.length}
+            </p>
+          </div>
+          {filteredConversations.map((c) => (
             <div
               key={c.id}
               onMouseEnter={() => setHoveredId(c.id)}
@@ -111,6 +136,9 @@ export default function Sidebar({
               )}
             </div>
           ))}
+          {filteredConversations.length === 0 && (
+            <div className="px-3 py-8 text-center text-xs text-white/25">No matching conversations</div>
+          )}
         </div>
       )}
 

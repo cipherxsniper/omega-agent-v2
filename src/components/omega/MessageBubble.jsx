@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronUp, ExternalLink, Brain, Clock, Copy, Check } from "lucide-react";
+import InlineActivityStrip from "@/components/omega/InlineActivityStrip";
 
 function CodeBlock({ inline, className, children }) {
   const [copied, setCopied] = useState(false);
@@ -89,7 +90,7 @@ function MessageMarkdown({ content }) {
   );
 }
 
-export default function MessageBubble({ message, onOpenWorkspace }) {
+export default function MessageBubble({ message, onOpenWorkspace, liveTranscript, isThinking = false }) {
   const [showReasoning, setShowReasoning] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [msgCopied, setMsgCopied] = useState(false);
@@ -145,6 +146,13 @@ export default function MessageBubble({ message, onOpenWorkspace }) {
               <MessageMarkdown content={message.content} />
             )}
           </div>
+          {!isUser && (
+            <InlineActivityStrip
+              transcript={message.transcript || liveTranscript || []}
+              isThinking={isThinking}
+              onOpenWorkspace={onOpenWorkspace}
+            />
+          )}
         </div>
 
         {/* Bubble actions */}

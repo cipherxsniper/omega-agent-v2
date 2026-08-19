@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
 import { clearContinuityCheckpoint, readContinuityCheckpoint, writeContinuityCheckpoint } from "@/lib/continuity";
+import { appendMissionEvent, hydrateMissionLedger } from "@/lib/missionLedger";
+import { beginRecovery, detectDependency, evaluateSelfHealing } from "@/lib/selfHealing";
+import { coordinateSwarm, createNodeIdentity, createSignedObservation } from "@/lib/federatedSwarm";
 import { AnimatePresence } from "framer-motion";
 import { buildPromptWithMemory, buildConversationMessages, extractMemoryCandidate, BASE_SYSTEM_PROMPT } from "@/lib/omega-system";
 import OmegaIntro from "@/components/omega/OmegaIntro";
@@ -61,14 +64,104 @@ export default function Home() {
   const [resumeCheckpoint, setResumeCheckpoint] = useState(null);
   const [continuityContext, setContinuityContext] = useState(null);
   const [mission, setMission] = useState(null);
+  const [missionHistory, setMissionHistory] = useState([]);
+  const [recovery, setRecovery] = useState(null);
+  const [replayRequest, setReplayRequest] = useState(null);
+  const [ledger, setLedger] = useState({ status: "empty", missions: [], events: [] });
+  const [selfHealing, setSelfHealing] = useState({ state: "healthy", reason: "No degraded dependency observed." });
+  const selfHealingReceiptRef = useRef("");
+  const swarmIdentityRef = useRef(null);
+  const swarmReceiptRef = useRef("");
+  const [swarm, setSwarm] = useState({ state: "awaiting_observations", quorum: 0, required: 2, verified: [], rejected: [], observations: [], nodeId: "initializing" });
 
   useEffect(() => {
     if (!showIntro) loadConversations();
   }, [showIntro]);
 
   useEffect(() => {
+    if (showIntro) return;
+    hydrateMissionLedger().then((result) => {
+      setLedger(result);
+      if (result.status === "verified" && result.missions?.length) setMissionHistory(result.missions);
+    });
+  }, [showIntro]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
+
+  useEffect(() => {
+    const signal = detectDependency({ isThinking, eventCount: recovery?.eventCount || 0, recovery: { ...(recovery || {}), ledgerStatus: ledger.status } , ledgerStatus: ledger.status });
+    const decision = evaluateSelfHealing({ signal, recovery: { ...(recovery || {}), ledgerStatus: ledger.status }, councilApproved: false });
+    const receiptKey = signal ? `${signal.id}:${decision.state}:${recovery?.attempts || 0}` : "healthy";
+    if (receiptKey !== selfHealingReceiptRef.current) {
+      selfHealingReceiptRef.current = receiptKey;
+      if (signal) appendMissionEvent({ missionId: recovery?.missionId || mission?.id || "system", proofId: recovery?.proofId || mission?.proofId || "", type: `self_healing_${decision.state}`, status: decision.state, reason: decision.reason, step: decision.playbook?.id || signal.id }).then(() => hydrateMissionLedger().then(setLedger));
+    }
+    setSelfHealing(decision);
+    if (decision.state === "recovering" && decision.playbook?.id === "refresh_ledger") {
+      hydrateMissionLedger().then((result) => {
+        setLedger(result);
+        setSelfHealing({ ...decision, state: "recovered", reason: "Mission Ledger refreshed and integrity verified." });
+      });
+    }
+    if (decision.state === "recovering" && decision.playbook?.id === "reconnect_sse") {
+      setRecovery((current) => beginRecovery(decision, current || {}));
+      window.dispatchEvent(new CustomEvent("omega:self-heal", { detail: { playbook: decision.playbook.id } }));
+    }
+  }, [isThinking, recovery?.status, recovery?.eventCount, recovery?.startedAt, ledger.status]);
+
+  useEffect(() => {
+    createNodeIdentity().then((identity) => {
+      swarmIdentityRef.current = identity;
+      setSwarm((current) => ({ ...current, nodeId: identity.nodeId }));
+    });
+    const receiveObservation = (event) => {
+      const observation = event.detail;
+      if (!observation) return;
+      setSwarm((current) => {
+        const observations = [...(current.observations || []), observation].slice(-20);
+        coordinateSwarm(observations).then((decision) => setSwarm((latest) => ({ ...latest, ...decision, observations })));
+        return current;
+      });
+    };
+    window.addEventListener("omega:swarm-observation", receiveObservation);
+    return () => window.removeEventListener("omega:swarm-observation", receiveObservation);
+  }, []);
+
+  useEffect(() => {
+    if (!swarmIdentityRef.current || !mission?.id) return;
+    createSignedObservation(swarmIdentityRef.current, {
+      missionId: mission.id,
+      signal: selfHealing?.signal?.id || "healthy",
+      proposal: selfHealing?.playbook?.id || "refresh_ledger",
+      severity: selfHealing?.signal?.severity || "low",
+    }).then((observation) => {
+      const observations = [...(swarm.observations || []).filter((item) => item.nodeId !== observation.nodeId), observation].slice(-20);
+      coordinateSwarm(observations).then((decision) => {
+        const next = { ...decision, observations, nodeId: swarmIdentityRef.current.nodeId };
+        setSwarm(next);
+        const key = `${next.state}:${next.quorum}:${next.proposal || ""}`;
+        if (swarmReceiptRef.current !== key) {
+          swarmReceiptRef.current = key;
+          appendMissionEvent({ missionId: mission.id, proofId: mission.proofId, type: `swarm_${next.state}`, status: next.state, step: next.proposal || next.signal || "observation", reason: next.state === "conflict" ? "Conflicting swarm proposals" : "Federated swarm observation" }).then(() => hydrateMissionLedger().then(setLedger));
+        }
+      });
+    });
+  }, [mission?.id, selfHealing?.state, selfHealing?.signal?.id, selfHealing?.playbook?.id]);
+
+  useEffect(() => {
+    if (!isThinking) return undefined;
+    const timer = window.setTimeout(() => {
+      setRecovery((current) => current || {
+        status: "degraded",
+        reason: "No terminal mission evidence observed within the bounded wait window.",
+        attempts: 0,
+        maxAttempts: 2,
+      });
+    }, 30000);
+    return () => window.clearTimeout(timer);
+  }, [isThinking]);
 
   useEffect(() => {
     const checkpoint = readContinuityCheckpoint(activeConversationId);
@@ -221,6 +314,7 @@ Return 3-7 steps. Be specific to the actual task.`;
         };
       }),
     ).then((items) => items.filter(Boolean));
+    setReplayRequest({ text, mode, attachments: [] });
     const attachmentContext = normalizedAttachments.length
       ? `\n\nATTACHED FILES:\n${normalizedAttachments.map((item) =>
           `- ${item.name} (${item.type}, ${item.size} bytes)${item.isImage ? "\\n[PHOTO ATTACHED: sent to the configured vision-capable model for analysis.]" : ""}${item.extractedText ? `\\n${item.extractedText}` : ""}`
@@ -248,6 +342,8 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     const newMission = await buildMission(text, mode, normalizedAttachments);
     setMission(newMission);
+    setMissionHistory((previous) => [...previous.filter((item) => item.id !== newMission.id), { ...newMission, status: "active", transcript: [] }].slice(-6));
+    appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: "mission_started", status: "active" }).then(() => hydrateMissionLedger().then(setLedger));
 
     // Save user message
     const userMsg = await base44.entities.Message.create({
@@ -263,6 +359,7 @@ Return 3-7 steps. Be specific to the actual task.`;
     setMessages((prev) => [...prev, userMsg]);
     setIsThinking(true);
     setLiveTranscript([]);
+    setRecovery({ status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount: 0, attempts: 0, maxAttempts: 2, startedAt: Date.now(), reason: "Mission checkpoint created; awaiting live evidence." });
     persistContinuity(convId, {
       status: "running",
       lastUserText: text,
@@ -273,6 +370,18 @@ Return 3-7 steps. Be specific to the actual task.`;
     });
 
     const startTime = Date.now();
+    const recordLiveStep = (step) => {
+      setLiveTranscript((prev) => [...prev, step]);
+      const eventCount = (recovery?.eventCount || 0) + 1;
+      setRecovery((current) => ({ ...(current || {}), status: "checkpointed", missionId: newMission.id, proofId: newMission.proofId, eventCount, lastStep: step.title || step.name || step.role || "Working", reason: "Checkpoint advanced from an observed SSE event." }));
+      appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: "sse_step", status: "checkpointed", step: step.title || step.name || step.role || "Working", eventCount, evidenceHash: step.decision_provenance?.context_hash || "" }).then(() => hydrateMissionLedger().then(setLedger));
+      persistContinuity(convId, {
+        status: "running",
+        lastUserText: text,
+        mode,
+        lastStep: step.title || step.name || step.role || "Working",
+      });
+    };
 
     // Step 1: Generate plan
     const planSteps = await generatePlan(requestText, mode, convId);
@@ -394,15 +503,7 @@ Return 3-7 steps. Be specific to the actual task.`;
             },
           },
         },
-        onStep: (step) => {
-          setLiveTranscript((prev) => [...prev, step]);
-          persistContinuity(convId, {
-            status: "running",
-            lastUserText: text,
-            mode,
-            lastStep: step.title || step.name || step.role || "Working",
-          });
-        },
+        onStep: recordLiveStep,
       });
       response = response.data || response;
     } else {
@@ -416,19 +517,14 @@ Return 3-7 steps. Be specific to the actual task.`;
             response: { type: "string" },
           },
         },
-        onStep: (step) => {
-          setLiveTranscript((prev) => [...prev, step]);
-          persistContinuity(convId, {
-            status: "running",
-            lastUserText: text,
-            mode,
-            lastStep: step.title || step.name || step.role || "Working",
-          });
-        },
+        onStep: recordLiveStep,
       });
       response = response.data || response;
     }
 
+    if (response?.error) {
+      setRecovery((current) => ({ ...(current || {}), status: "degraded", reason: response.error, attempts: current?.attempts || 0, maxAttempts: 2 }));
+    }
     const responseTime = Date.now() - startTime;
 
     // Parse response
@@ -523,8 +619,16 @@ Return 3-7 steps. Be specific to the actual task.`;
 
     setMessages((prev) => [...prev, assistantMsg]);
     setIsThinking(false);
+    const recoveryStatus = response?.error ? "degraded" : verificationResult && !(verificationResult.data || verificationResult).passed ? "degraded" : "recovered";
+    setRecovery((current) => ({ ...(current || {}), status: recoveryStatus, missionId: newMission.id, proofId: newMission.proofId, reason: response?.error || "Terminal response and proof metadata recorded." }));
+    appendMissionEvent({ missionId: newMission.id, proofId: newMission.proofId, objective: newMission.objective, type: recoveryStatus === "recovered" ? "recovered" : "degraded", status: recoveryStatus, reason: response?.error || "Terminal response and proof metadata recorded." }).then(() => hydrateMissionLedger().then(setLedger));
     clearContinuityCheckpoint(convId);
-    setMission((current) => current ? { ...current, completedAt: new Date().toISOString() } : current);
+    const completedAt = new Date().toISOString();
+    setMission((current) => current ? { ...current, completedAt, status: "verified", transcript: response.transcript || [] } : current);
+    setMissionHistory((previous) => previous.map((item) => item.id === newMission.id
+      ? { ...item, completedAt, status: "verified", transcript: response.transcript || [] }
+      : item
+    ));
 
     // Update conversation title if first message
     if (messages.length === 0) {
@@ -534,6 +638,12 @@ Return 3-7 steps. Be specific to the actual task.`;
         prev.map((c) => (c.id === convId ? { ...c, title } : c))
       );
     }
+  };
+
+  const replayLastMission = async () => {
+    if (!replayRequest || isThinking || (recovery?.attempts || 0) >= (recovery?.maxAttempts || 2)) return;
+    setRecovery((current) => ({ ...(current || {}), status: "replaying", attempts: (current?.attempts || 0) + 1, reason: "Replaying from the last verified checkpoint with a bounded retry." }));
+    await handleSend(replayRequest.text, replayRequest.mode, replayRequest.attachments || []);
   };
 
   const handleIntroComplete = useCallback(() => setShowIntro(false), []);
@@ -621,7 +731,13 @@ Return 3-7 steps. Be specific to the actual task.`;
             ) : (
               <>
                 {messages.map((msg) => (
-                  <MessageBubble key={msg.id} message={msg} onOpenWorkspace={() => setShowMobileWorkspace(true)} />
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      liveTranscript={isThinking ? liveTranscript : []}
+                      isThinking={isThinking}
+                      onOpenWorkspace={() => setShowMobileWorkspace(true)}
+                    />
                 ))}
                 {isThinking && <TypingIndicator />}
                 <div ref={messagesEndRef} />
@@ -644,6 +760,12 @@ Return 3-7 steps. Be specific to the actual task.`;
             conversationId={activeConversationId}
             isThinking={isThinking}
             mission={mission}
+            missions={missionHistory.length ? missionHistory : ledger.missions}
+            recovery={recovery}
+            ledger={ledger}
+            selfHealing={selfHealing}
+            swarm={swarm}
+            onReplay={replayLastMission}
             transcript={
               isThinking && liveTranscript.length > 0
                 ? liveTranscript
@@ -669,6 +791,11 @@ Return 3-7 steps. Be specific to the actual task.`;
                 conversationId={activeConversationId}
                 isThinking={isThinking}
                 mission={mission}
+                missions={missionHistory.length ? missionHistory : ledger.missions}
+                ledger={ledger}
+                selfHealing={selfHealing}
+                swarm={swarm}
+                onReplay={replayLastMission}
                 transcript={
                   isThinking && liveTranscript.length > 0
                     ? liveTranscript
