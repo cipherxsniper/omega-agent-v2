@@ -192,7 +192,11 @@ class ActionExecutor:
                 
         return execution_trace
 
-    OMEGA_WORKSPACE = os.path.expanduser("~/omega_workspace")
+    # Render and fresh Termux installs may not have the workspace hub yet.
+    # Create the approved runtime directory before any tool executes so
+    # run_bash cannot fail solely because its cwd is absent.
+    OMEGA_WORKSPACE = os.path.abspath(os.path.expanduser(os.environ.get("OMEGA_WORKSPACE", "~/omega_workspace")))
+    os.makedirs(OMEGA_WORKSPACE, exist_ok=True)
     OMEGA_ROOT = os.path.realpath(OMEGA_WORKSPACE)
 
     @classmethod
@@ -275,6 +279,30 @@ class ActionExecutor:
             # so every downstream branch (open/os.listdir/etc.) gets a
             # correct path regardless of this process's actual cwd.
             target = self._resolve_target(target)
+
+        if name in ("inspect_local_environment", "scan_iot_devices"):
+            import platform
+            import socket
+            try:
+                interfaces = [name for _, name in socket.if_nameindex()]
+            except (AttributeError, OSError):
+                interfaces = []
+            try:
+                workspace_entries = sorted(os.listdir(self.OMEGA_WORKSPACE))[:100]
+            except OSError:
+                workspace_entries = []
+            return True, {
+                "status_code": "OK",
+                "inspection_scope": "local_only",
+                "network_probe_performed": False,
+                "platform": platform.platform(),
+                "hostname": socket.gethostname(),
+                "cwd": os.getcwd(),
+                "workspace": self.OMEGA_WORKSPACE,
+                "workspace_entries": workspace_entries,
+                "interface_names": interfaces,
+                "note": "No remote or IoT device scan was performed.",
+            }
 
         if name == "read_file":
             if not target:
